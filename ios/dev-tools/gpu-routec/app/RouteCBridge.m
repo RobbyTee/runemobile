@@ -268,6 +268,9 @@ static BOOL rcBuildFbo(int w, int h)
 // ANGLE TU cannot import CoreVideo anyway — it pulls the conflicting OpenGLES module). No-op stubs.
 + (void)setPipPresentLayer:(id)layer { (void) layer; }
 + (void)setPipPresentEnabled:(BOOL)on { (void) on; }
++ (void)setPipShownRows:(int)rows {
+    (void)rows;
+}
 
 + (BOOL)isPresenting
 {
@@ -312,6 +315,7 @@ static volatile BOOL sPipEnqueueOn = NO;              // flipped by the shell at
 static CVOpenGLESTextureCacheRef sPipTexCache = NULL; // EAGL-context texture cache (lazy, render thread)
 static CVPixelBufferPoolRef sPipPool = NULL;          // IOSurface-backed 32BGRA buffers (recycled by the display)
 static int sPipPoolW = 0, sPipPoolH = 0;
+static volatile int sPipShownRows = 0;                // top canvas rows blitted (0 = all; setPipShownRows:)
 static GLuint sPipFbo = 0;                            // blit-destination FBO (color = the frame's pixel-buffer texture)
 static CMVideoFormatDescriptionRef sPipFmt = NULL;
 
@@ -332,6 +336,8 @@ static void rcPipPresent(void)
 	{
 		return;
 	}
+	// The shown rows are the canvas's top ones: in GL's bottom-left origin, the FBO's top `rows` rows.
+	const int rows = (sPipShownRows > 0 && sPipShownRows < sFboH) ? sPipShownRows : sFboH;
 	if (!sPipTexCache)
 	{
 		if (CVOpenGLESTextureCacheCreate(kCFAllocatorDefault, NULL, sCtx, NULL, &sPipTexCache) != kCVReturnSuccess)
@@ -340,14 +346,14 @@ static void rcPipPresent(void)
 			return;
 		}
 	}
-	if (!sPipPool || sPipPoolW != sFboW || sPipPoolH != sFboH)
+	if (!sPipPool || sPipPoolW != sFboW || sPipPoolH != rows)
 	{
 		if (sPipPool) { CVPixelBufferPoolRelease(sPipPool); sPipPool = NULL; }
 		if (sPipFmt)  { CFRelease(sPipFmt); sPipFmt = NULL; }
 		NSDictionary *attrs = @{
 			(id) kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
 			(id) kCVPixelBufferWidthKey : @(sFboW),
-			(id) kCVPixelBufferHeightKey : @(sFboH),
+			(id) kCVPixelBufferHeightKey : @(rows),
 			(id) kCVPixelBufferIOSurfacePropertiesKey : @{},
 			(id) kCVPixelBufferOpenGLESCompatibilityKey : @YES,
 		};
@@ -356,7 +362,7 @@ static void rcPipPresent(void)
 			sPipPool = NULL;
 			return;
 		}
-		sPipPoolW = sFboW; sPipPoolH = sFboH;
+		sPipPoolW = sFboW; sPipPoolH = rows;
 	}
 
 	// Cap in-flight buffers: the display pipeline holds ~2; if it ever hoards the whole pool, skip this
@@ -370,7 +376,7 @@ static void rcPipPresent(void)
 	}
 	CVOpenGLESTextureRef tex = NULL;
 	if (CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, sPipTexCache, pb, NULL,
-			GL_TEXTURE_2D, GL_RGBA, sFboW, sFboH, GL_BGRA_EXT, GL_UNSIGNED_BYTE, 0, &tex) != kCVReturnSuccess || !tex)
+			GL_TEXTURE_2D, GL_RGBA, sFboW, rows, GL_BGRA_EXT, GL_UNSIGNED_BYTE, 0, &tex) != kCVReturnSuccess || !tex)
 	{
 		CVPixelBufferRelease(pb);
 		return;
@@ -394,7 +400,7 @@ static void rcPipPresent(void)
 	glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texName, 0);
 	glBindFramebuffer(GL_READ_FRAMEBUFFER, sFbo);
 	glReadBuffer(GL_COLOR_ATTACHMENT0);
-	glBlitFramebuffer(0, 0, sFboW, sFboH, 0, sFboH, sFboW, 0, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	glBlitFramebuffer(0, sFboH - rows, sFboW, sFboH, 0, rows, sFboW, 0, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 	glFlush();   // order the blit before the video pipeline samples the IOSurface
 
 	if (scissor) glEnable(GL_SCISSOR_TEST);
@@ -508,6 +514,10 @@ static BOOL rcBuildFbo(int w, int h)
 + (void)setPipPresentLayer:(id)layer { sPipLayer = (AVSampleBufferDisplayLayer *) layer; }
 
 + (void)setPipPresentEnabled:(BOOL)on { sPipEnqueueOn = on; }
+
++ (void)setPipShownRows:(int)rows {
+    sPipShownRows = rows > 0 ? rows : 0;
+}
 
 + (BOOL)prepareWindowSurfaceOnMain { return NO; }   // ANGLE-only; EAGL builds its drawable RBO in rcBuildFbo
 

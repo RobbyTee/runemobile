@@ -474,6 +474,7 @@ static jmethodID gMidGetChatLines = NULL;    // getChatLines()Ljava/lang/String;
 static jmethodID gMidGetDialogue = NULL;     // getDialogueJson()Ljava/lang/String;  (native-rendered dialogue)
 static jmethodID gMidGetDlgSeq = NULL;       // getDialogueSeq()J — bumped only when the dialogue CHANGES
 static jmethodID gMidSetOverlayInsets = NULL; // setOverlaySafeInsets(IIII)V (snap-corner safe frame)
+static jmethodID gMidSetHudStrip = NULL;      // setHudStrip(III)V (large portrait: shown rows + window band)
 static jmethodID gMidPanMap = NULL;          // panWorldMap(II)V  (world map: finger pan -> map centre)
 static jmethodID gMidOpenWorldMap = NULL;    // openWorldMap()V  (world map: discoverable one-shot open)
 static jmethodID gMidSwitchLayout = NULL;    // switchToModernLayout()V  (one-tap game layout switch)
@@ -557,6 +558,11 @@ static BOOL ensureVeneer(void) {
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         gMidSetOverlayInsets = NULL;
+    }
+    gMidSetHudStrip = (*env)->GetStaticMethodID(env, global, "setHudStrip", "(III)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidSetHudStrip = NULL;
     }
     gMidPanMap = (*env)->GetStaticMethodID(env, global, "panWorldMap", "(II)V");
     if ((*env)->ExceptionCheck(env)) {
@@ -2378,6 +2384,18 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
         bridgeNoteClear(env, "JVMLauncher.setCameraZoom");
 }
 
+// The top rows of the canvas that reach the screen (+setShownRows:); 0 = all of them.
+static _Atomic int gShownRows = 0;
+
++ (void)setShownRows:(int)rows {
+    atomic_store(&gShownRows, rows > 0 ? rows : 0);
+}
+
+static jint shownRows(jint h) {
+    int rows = atomic_load(&gShownRows);
+    return rows > 0 && rows < h ? (jint)rows : h;
+}
+
 + (UIImage *)latestFrame {
     if (!ensureBridge()) return nil;
     JNIEnv *env = gMainEnv;
@@ -2403,6 +2421,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     jsize len = (*env)->GetArrayLength(env, arr);
     NSUInteger need = (NSUInteger)w * (NSUInteger)h;
     if ((NSUInteger)len < need) { (*env)->DeleteLocalRef(env, arr); return nil; }
+    h = shownRows(h);
+    need = (NSUInteger)w * (NSUInteger)h;
 
     // PERF-1: rotating scratch ring backing the CGImage DIRECTLY — the old path copied the frame twice
     // (Java array -> scratch, scratch -> CFData). Depth 3 means a buffer isn't rewritten until two more
@@ -2539,6 +2559,7 @@ static void pipFeedOnce(const PipFeedJni *j, AVSampleBufferDisplayLayer *layer, 
         (*env)->DeleteLocalRef(env, arr);
         return;
     }
+    h = shownRows(h);
 
     // Recycling pool (IOSurface-backed, what the video pipeline wants); rebuilt if the canvas resizes.
     static CVPixelBufferPoolRef pool = NULL;
@@ -3234,6 +3255,16 @@ static BOOL pipFeedMarkerSaysMain(void) {
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetOverlayInsets, (jint)l, (jint)t, (jint)r, (jint)b);
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.setEngineOverlaySafeInsets"); }
+}
+
++ (void)setEngineHudStripRows:(int)visibleRows windowTop:(int)top bottom:(int)bottom {
+    if (!ensureVeneer() || !gMidSetHudStrip)
+        return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetHudStrip, (jint)visibleRows, (jint)top, (jint)bottom);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.setEngineHudStrip");
+    }
 }
 
 + (void)scrollEngineChat:(int)deltaCanvasPx {

@@ -136,6 +136,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Returns nil before the first draw / if the VM isn't up yet. Call on the main thread.
 + (nullable UIImage *)latestFrame;
 
+/// The canvas rows shown on screen: the frame and the Picture-in-Picture feed keep only the top `rows` rows, so the
+/// hidden strip below them (HudVeneerBridge.setHudStrip) never reaches the screen. 0 shows the whole canvas.
++ (void)setShownRows:(int)rows;
+
 /// The Picture-in-Picture frame feed's target layer (nil turns the feed off). Each new engine frame is copied into a
 /// 32BGRA CVPixelBuffer and enqueued on its sampleBufferRenderer, display-immediately. Never waits on the feed
 /// thread: a frame in flight re-checks the layer just before its enqueue and is dropped if the layer changed, so only
@@ -375,6 +379,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// corners by these (and drops the top-left corner below the relocated chat) so plugin overlays snapped to a
 /// corner (e.g. Quest Helper's top-left guidance panel) clear the curved bezel + the chat. Main thread.
 + (void)setEngineOverlaySafeInsetsL:(int)l t:(int)t r:(int)r b:(int)b;
+
+/// Large portrait (HudVeneerBridge.setHudStrip): the canvas rows on screen, with the chat and minimap drawn full size in
+/// the hidden rows below and copied back scaled; the game's windows open between `top` and `bottom` (canvas px).
+/// visibleRows <= 0 turns it off. Main thread.
++ (void)setEngineHudStripRows:(int)visibleRows windowTop:(int)top bottom:(int)bottom;
 
 /// W3 A3 (finger-scroll): scroll the chat by deltaCanvasPx (positive = toward newer/bottom) via the chatbox's own
 /// scroll layer — NOT a mouse wheel (a wheel over the transparent chat also zooms the camera). Main thread.

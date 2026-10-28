@@ -50,6 +50,9 @@
 // so hasPresentedFrame gates the reveal exactly like the CAEAGLLayer path. `id` = AVSampleBufferDisplayLayer.
 + (void)setPipPresentLayer:(id)sampleBufferDisplayLayer;
 + (void)setPipPresentEnabled:(BOOL)on;
+// The canvas rows the PiP present keeps: only the top `rows` rows are blitted, so the hidden strip below them
+// (HudVeneerBridge.setHudStrip) never reaches the screen. 0 = the whole FBO. Main thread, before the GPU launch.
++ (void)setPipShownRows:(int)rows;
 // ANGLE only: create the EGL display + WINDOW surface from the present layer ON MAIN (the CAMetalLayer's thread),
 // before the render thread's createGLContext. No-op/NO on EAGL or with no present layer. Returns NO -> use readback.
 + (BOOL)prepareWindowSurfaceOnMain;

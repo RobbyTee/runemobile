@@ -450,6 +450,11 @@ static NSString *RMPasteLine(NSString *s) {
 // draws (set at launch); chatHitCanvas = the relocated chat tab-row rect in canvas px (onTap treats it as UI).
 @property (nonatomic, assign) int renderW;
 @property (nonatomic, assign) int renderH;
+// The canvas rows on screen: renderH, less the hidden strip under them on a large-portrait canvas (kStripCanvasH).
+@property (nonatomic, assign) int visibleH;
+// The window band last sent with setEngineHudStrip, so it is sent again only when it moves.
+@property (nonatomic, assign) BOOL stripSent;
+@property (nonatomic, assign) int stripBandTop, stripBandBottom;
 
 // GPU Route C direct present: a CAEAGLLayer (EAGL) / CAMetalLayer (ANGLE) the engine renders straight into (no
 // readback). nil in CPU/L1 mode. Kept strong so the layer outlives the EGL/EAGL surface that references it.
@@ -743,6 +748,17 @@ static const int kMinimapClusterW = 211;
 static const CGFloat kLargeScreenPt = 600.0;
 static const CGFloat kPhoneShortPt = 440.0;
 static const int kMinCanvasW = 765;
+// Large portrait (a phone in portrait): the canvas is kStripCanvasW wide, so the world, the inventory, the tab group
+// and the windows show 1.28x bigger, and kStripCanvasH rows under the screen hold the chat and minimap at full size
+// (HudVeneerBridge.setHudStrip), copied back over the world at kStripCanvasW/kMinCanvasW scale. sHudScale is that
+// scale while the strip is on, else 1: the chat's and minimap's engine-px sizes below are multiplied by it on screen.
+// The Android twins are STRIP_CANVAS_W and STRIP_CANVAS_H in MainActivity.
+static const int kStripCanvasW = 600;
+static const int kStripCanvasH = 400; // HudStrip.STRIP_H
+static CGFloat sHudScale = 1.0;
+static int hudPx(int enginePx) {
+    return (int)lround(enginePx * sHudScale);
+}
 
 // W3 A3 (the chat's filter row, matching the official OSRS-mobile app): the ENGINE draws the 7 filter stones (no
 // Report: the official app doesn't show it in the row), with each channel's name and live filter state, at the
@@ -3286,7 +3302,9 @@ static const int kCamPitchPxPerSec = 200;
     [self onClosePluginPanel];                     // hide the card so the live overlays show through
     if (self.overlayEdit) { [self.overlayEdit dismiss]; self.overlayEdit = nil; }
     OverlayEditView *ov = [[OverlayEditView alloc] initWithFrame:self.view.bounds
-                                                         canvasW:self.renderW canvasH:self.renderH presenter:self];
+                                                         canvasW:self.renderW
+                                                         canvasH:self.visibleH
+                                                       presenter:self];
     ov.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     ov.hudHost = self; // show the chatbox and minimap as draggable handles
     __weak typeof(self) ws = self;
@@ -4176,7 +4194,11 @@ static void *perfProbePump(void *unused) {
 - (CGRect)viewRectForGameX:(int)gx y:(int)gy w:(int)gw h:(int)gh {
     UIImage *img = self.screen.image;
     CGFloat iw = img ? img.size.width : 0, ih = img ? img.size.height : 0;
-    if ((iw <= 0 || ih <= 0) && self.renderW > 0) { iw = self.renderW; ih = self.renderH; }  // GPU present: no UIImage
+    // GPU present: no UIImage
+    if ((iw <= 0 || ih <= 0) && self.renderW > 0) {
+        iw = self.renderW;
+        ih = self.visibleH;
+    }
     if (iw <= 0 || ih <= 0) return CGRectZero;
     CGRect b = self.screen.bounds;
     CGFloat scale = MIN(b.size.width / iw, b.size.height / ih);
@@ -4444,7 +4466,7 @@ static UIColor *rgbColor(int rgb) {
 
 // The filter row's height in ENGINE-CANVAS px (screen-scale independent): what a tap there treats as UI.
 static int chatRowCanvasH(void) {
-    return kChatTabRowCanvasH;
+    return hudPx(kChatTabRowCanvasH);
 }
 
 // Lay the 7 filter-stone tap targets over the engine's stones from the chat snapshot each tick. Mirrors updateChrome:
@@ -4557,8 +4579,8 @@ static int chatRowCanvasH(void) {
     // One bare target over each engine stone, with its channel and filter state for VoiceOver.
     for (int i = 0; i < kChatTabCount; i++) {
         UIButton *b = self.chatTabButtons[i];
-        b.frame = CGRectMake((chatX + kChatTabX + i * kChatTabPitch) * s, (chatY + kChatTabY) * s, kChatTabW * s,
-                             kChatTabH * s);
+        b.frame = CGRectMake((chatX + hudPx(kChatTabX + i * kChatTabPitch)) * s, (chatY + hudPx(kChatTabY)) * s,
+                             hudPx(kChatTabW) * s, hudPx(kChatTabH) * s);
         NSDictionary *t = (i < (int)tabs.count && [tabs[i] isKindOfClass:[NSDictionary class]]) ? tabs[i] : nil;
         NSString *filter = [t[@"filter"] isKindOfClass:[NSString class]] ? t[@"filter"] : @"";
         b.accessibilityLabel = filter.length ? [NSString stringWithFormat:@"%@, %@", kChatTabNames[i], filter]
@@ -4677,8 +4699,8 @@ static int chatRowCanvasH(void) {
     CGFloat s = self.view.bounds.size.width / (CGFloat)self.renderW;
     CGFloat boxX = floor([cd[@"chatX"] intValue] * s);
     CGFloat boxY = floor([cd[@"chatY"] intValue] * s);
-    CGFloat boxW = ceil(kDialogueCanvasW * s);
-    CGFloat boxH = ceil(kDialogueCanvasH * s);
+    CGFloat boxW = ceil(kDialogueCanvasW * sHudScale * s);
+    CGFloat boxH = ceil(kDialogueCanvasH * sHudScale * s);
     self.dialogueView.frame = CGRectMake(boxX, boxY, boxW, boxH);
     self.dialogueView.hidden = NO;
     if (self.chatMessagesView) self.chatMessagesView.hidden = YES;   // the dialogue replaces the chat lines
@@ -4705,7 +4727,7 @@ static int chatRowCanvasH(void) {
     self.dialogueViewSeq = viewSeq;
     if (![js isEqualToString:self.lastDialogueJson]) {
         self.lastDialogueJson = js;
-        [self rebuildDialogueContent:d scale:s];
+        [self rebuildDialogueContent:d scale:s * sHudScale];
         // One line per new dialogue so a misaligned head cutout / continue target is diagnosable from the log.
         [self appendLine:[NSString stringWithFormat:@"[dlg] type=%@ box=%@ head=%@ cont=(%.0f,%.0f)",
             d[@"type"], NSStringFromCGRect(self.dialogueView.frame), NSStringFromCGRect(headInView),
@@ -5046,7 +5068,8 @@ static int chatRowCanvasH(void) {
     if (!t) return NO;
     int bx = [t[@"x"] intValue], by = [t[@"y"] intValue], bw = [t[@"w"] intValue], bh = [t[@"h"] intValue];
     if (bw <= 0 || bh <= 0 || bx < 0 || by < 0) return NO;   // engine button not built / not visible this frame
-    if (self.renderH > 0 && by >= self.renderH) return NO;   // shoved off-canvas (e.g. while the chat is collapsed)
+    if (self.visibleH > 0 && by >= self.visibleH)
+        return NO; // shoved off-screen (e.g. while the chat is collapsed)
     *cx = bx + bw / 2; *cy = by + bh / 2;
     return YES;
 }
@@ -5891,7 +5914,7 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     if (self.chatBaseX > 0) {
         int chatX = [self clampChatX:self.chatBaseX + self.chatUserDX];
         int chatY = [self clampChatY:self.chatBaseY + self.chatUserDY];
-        CGFloat colX = (chatX - kDoorCanvasW) / k;
+        CGFloat colX = (chatX - hudPx(kDoorCanvasW)) / k;
         // While the column sits by the screen's left edge each stone reaches out to it, and the door up to the top
         // edge; a chat dragged away from them keeps only a small slop, so the column never takes the world's taps.
         UIEdgeInsets safe = self.view.safeAreaInsets;
@@ -5899,9 +5922,10 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
         CGFloat reachLeft = colX <= safe.left + slop ? colX : slop;
         for (int c = 0; c < 3; c++) {
             UIButton *b = column[c];
-            b.frame = CGRectMake(colX, (chatY + kColumnY + c * kColumnPitch) / k, kDoorCanvasW / k, kColumnStoneH / k);
+            b.frame = CGRectMake(colX, (chatY + hudPx(kColumnY + c * kColumnPitch)) / k, hudPx(kDoorCanvasW) / k,
+                                 hudPx(kColumnStoneH) / k);
             CGFloat top = CGRectGetMinY(b.frame);
-            CGFloat reachUp = c != 0 ? 0.0 : (top <= safe.top + kColumnY / k + slop ? top : slop);
+            CGFloat reachUp = c != 0 ? 0.0 : (top <= safe.top + hudPx(kColumnY) / k + slop ? top : slop);
             if ([b isKindOfClass:[TabGridButton class]])
                 ((TabGridButton *)b).hitOutset = UIEdgeInsetsMake(reachUp, reachLeft, 0.0, 0.0);
         }
@@ -5942,6 +5966,31 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     if (sideY < 0)
         sideY = 0;
     [JVMLauncher relocateEngineSidePanelX:sideX y:sideY];
+
+    // Large portrait: the game's windows keep to the band under the chat and the minimap and over the group and
+    // the side panel, so neither covers a window's edge.
+    if (self.visibleH < self.renderH && self.chatBaseX > 0) {
+        int top = [self clampChatY:self.chatBaseY + self.chatUserDY] + chatRowCanvasH() + hudPx(kChatContentCanvasH);
+        if (!CGRectIsNull(mmRect))
+            top = MAX(top, (int)CGRectGetMaxY(mmRect));
+        int bottom = MIN(sideY, (int)lround(gy0 * k));
+        [self sendHudStripTop:top + 6 bottom:bottom - 6];
+    }
+}
+
+// Large portrait: hand the engine the canvas rows on screen and the band its windows open in. Sent again only when
+// the band moves (a dragged chat or minimap); the engine keeps it across a logout.
+- (void)sendHudStripTop:(int)top bottom:(int)bottom {
+    if (self.visibleH <= 0 || self.visibleH >= self.renderH)
+        return;
+    if (self.stripSent && top == self.stripBandTop && bottom == self.stripBandBottom)
+        return;
+    self.stripSent = YES;
+    self.stripBandTop = top;
+    self.stripBandBottom = bottom;
+    [JVMLauncher setEngineHudStripRows:self.visibleH windowTop:top bottom:bottom];
+    [self appendLine:[NSString stringWithFormat:@"[strip] shown %d of %d rows, windows %d..%d", self.visibleH,
+                                                self.renderH, top, bottom]];
 }
 
 // The ⌨︎ FAB stands down while the column's keyboard stone is up (the official app has only the stone), and while the
@@ -6471,8 +6520,20 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     int renderLong = shortPt > 0 ? (int)lround(renderShort * (longPt / shortPt)) : (int)lround(renderShort * 2.0);
     renderH = portrait ? renderLong : renderShort;
     int renderW = portrait ? renderShort : renderLong;
+    // Large portrait on a phone: a kStripCanvasW-wide canvas whose screen ends visibleH rows down, with the strip
+    // for the chat and minimap under it. The frame feeds keep only the visible rows.
+    int visibleH = renderH;
+    if (portrait && shortPt > 0 && shortPt < kLargeScreenPt && !self.pendingRouteCGpuNoResize) {
+        renderW = kStripCanvasW;
+        visibleH = (int)lround(kStripCanvasW * longPt / shortPt);
+        renderH = visibleH + kStripCanvasH;
+        sHudScale = (CGFloat)kStripCanvasW / kMinCanvasW;
+    }
     self.renderW = renderW;
     self.renderH = renderH;
+    self.visibleH = visibleH;
+    [JVMLauncher setShownRows:visibleH < renderH ? visibleH : 0];
+    [RouteCBridge setPipShownRows:visibleH < renderH ? visibleH : 0];
     if (self.pendingRouteCGpuNoResize) {
         // GPU Route C bisection: leave the canvas at the classic fixed 765x503 (no resizable switch) so we can
         // tell whether the scene render is suppressed by GPU mode itself or only by the resizable-layout path.
@@ -6480,8 +6541,8 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
         [self appendLine:@"[shell] *** GPU Route C — FIXED mode (no headless.resize, 765x503 bisection) ***"];
     } else {
         launcher.resizeSpec = [NSString stringWithFormat:@"%dx%d", renderW, renderH];
-        [self appendLine:[NSString stringWithFormat:@"[shell] full-screen %.0fx%.0f aspect %.3f -> render %@",
-                          sw, sh, aspect, launcher.resizeSpec]];
+        [self appendLine:[NSString stringWithFormat:@"[shell] full-screen %.0fx%.0f aspect %.3f -> render %@ shown %d rows",
+                                                    sw, sh, aspect, launcher.resizeSpec, visibleH]];
     }
 
     // Background staying-power + Picture-in-Picture, armed BEFORE the present-layer wiring below: the 117HD
@@ -6518,9 +6579,11 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
                               renderW, renderH]];
         } else {
             CAEAGLLayer *gl = [CAEAGLLayer layer];
-            gl.frame = self.screen.bounds;
+            // From this launch's sides, not the bounds: the window can still be turning (see above). The strip's rows
+            // run on below the screen.
+            gl.frame = CGRectMake(0, 0, sw, sh * renderH / visibleH);
             gl.opaque = YES;
-            gl.contentsScale = (sh > 0 ? (CGFloat)renderH / sh : 1.0);   // drawable = renderW x renderH (== engine canvas)
+            gl.contentsScale = (sh > 0 ? (CGFloat)visibleH / sh : 1.0); // drawable = renderW x renderH (== engine canvas)
             gl.drawableProperties = @{ kEAGLDrawablePropertyRetainedBacking : @NO,
                                        kEAGLDrawablePropertyColorFormat : kEAGLColorFormatRGBA8 };
             // Start HIDDEN + lazily reveal: the CAEAGLLayer is a sublayer of the UIImageView so it draws ABOVE the
@@ -6545,11 +6608,11 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     if (self.pendingRouteCGpu && !self.pendingRouteCGpuNoResize) {
         [self.view layoutIfNeeded];
         CAMetalLayer *ml = [CAMetalLayer layer];
-        ml.frame = self.screen.bounds;
+        ml.frame = CGRectMake(0, 0, sw, sh * renderH / visibleH); // this launch's sides; the strip runs on below
         ml.opaque = YES;
         ml.framebufferOnly = NO;
         ml.drawableSize = CGSizeMake(renderW, renderH);
-        ml.contentsScale = (sh > 0 ? (CGFloat)renderH / sh : 1.0);
+        ml.contentsScale = (sh > 0 ? (CGFloat)visibleH / sh : 1.0);
         [self.screen.layer insertSublayer:ml atIndex:0];
         self.metalLayer = ml;
         [RouteCBridge setPresentLayer:ml];
@@ -6653,7 +6716,7 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     int topC   = (int)lround(ins.top * k);
     int leftC  = (int)lround(ins.left * k);
     int rightC = (int)lround(self.hudRightLaid * k);
-    const int m = 8; // canvas-px margin from the safe edge
+    const int m = hudPx(8); // canvas-px margin from the safe edge
     // Make the minimap BIGGER: enlarge the engine globe + reposition its chrome (HudVeneerBridge.setMinimapScale).
     // The globe is right-anchored, so it grows left+down within the cluster — the right edge stays at MM_W, so the
     // cluster still aligns to the right safe edge; only the orbs/compass spread further left/down (into the gap
@@ -6662,9 +6725,9 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
 
     // The chat column takes the safe area's top-left corner, flush, as the official one does, and the chat sits right
     // of it (updateChrome lays the column).
-    self.chatBaseX = leftC + kDoorCanvasW;
+    self.chatBaseX = leftC + hudPx(kDoorCanvasW);
     self.chatBaseY = topC;
-    self.minimapBaseX = self.renderW - kMinimapClusterW - rightC - m;
+    self.minimapBaseX = self.renderW - hudPx(kMinimapClusterW) - rightC - m;
     self.minimapBaseY = topC + m;
 
     // transparent:YES = OSRS-mobile translucent chat (text over the scene, no opaque box) — the official look.
@@ -6673,6 +6736,8 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     // W3 A3: the native veneer recreates the tab row BIGGER (engine push-down applied per-tick in updateChatTabs).
     [self applyMinimapRelocate];                            // base anchor + the persisted user offset, like the chat
     [JVMLauncher setEngineMinimapScale:kMinimapScalePct];   // enlarge the globe + reposition its chrome to hug it
+    if (!self.stripSent)
+        [self sendHudStripTop:0 bottom:0];     // large portrait on; updateChrome sends the window band
     [JVMLauncher setEngineStonesHidden:YES];   // the native 2-col grid replaces them (no cover patch / gray box)
     // Overlay snap-corner safe frame: plugin overlays snapped to a corner (Quest Helper's top-left guidance
     // panel etc.) clear the curved bezel/notch; the engine also drops the top-left corner below the chat.
@@ -6727,7 +6792,7 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
 }
 
 - (int)clampMinimapX:(int)x {
-    int w = self.minimapCanvasSize.width > 0 ? (int)self.minimapCanvasSize.width : kMinimapClusterW;
+    int w = self.minimapCanvasSize.width > 0 ? (int)self.minimapCanvasSize.width : hudPx(kMinimapClusterW);
     int maxX = self.renderW - w;
     if (maxX < 0)
         maxX = 0;
@@ -6735,7 +6800,7 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
 }
 
 - (int)clampMinimapY:(int)y {
-    int maxY = self.renderH - (int)self.minimapCanvasSize.height; // height unknown (0): keep the top on-screen
+    int maxY = self.visibleH - (int)self.minimapCanvasSize.height; // height unknown (0): keep the top on-screen
     if (maxY < 0)
         maxY = 0;
     return y < 0 ? 0 : (y > maxY ? maxY : y);
@@ -6759,20 +6824,21 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     int chatX = [self clampChatX:self.chatBaseX + self.chatUserDX];
     int chatY = [self clampChatY:self.chatBaseY + self.chatUserDY];
     [JVMLauncher relocateEngineChatX:chatX y:chatY transparent:YES];
-    self.chatHitCanvas = CGRectMake(chatX, chatY, kChatW, chatRowCanvasH());
-    self.chatScrollCanvas = CGRectMake(chatX, chatY, kChatW, chatRowCanvasH() + kChatContentCanvasH);
+    self.chatHitCanvas = CGRectMake(chatX, chatY, hudPx(kChatW), chatRowCanvasH());
+    self.chatScrollCanvas = CGRectMake(chatX, chatY, hudPx(kChatW), chatRowCanvasH() + hudPx(kChatContentCanvasH));
 }
 
 - (int)clampChatX:(int)x {
-    int maxX = self.renderW - kChatW;
-    if (maxX < kDoorCanvasW)
-        maxX = kDoorCanvasW;
-    return x < kDoorCanvasW ? kDoorCanvasW : (x > maxX ? maxX : x); // room for the door on its left
+    int door = hudPx(kDoorCanvasW);
+    int maxX = self.renderW - hudPx(kChatW);
+    if (maxX < door)
+        maxX = door;
+    return x < door ? door : (x > maxX ? maxX : x); // room for the door on its left
 }
 
 - (int)clampChatY:(int)y {
-    int boxH = chatRowCanvasH() + kChatContentCanvasH;
-    int maxY = self.renderH - boxH;
+    int boxH = chatRowCanvasH() + hudPx(kChatContentCanvasH);
+    int maxY = self.visibleH - boxH;
     if (maxY < 0) maxY = 0;
     return y < 0 ? 0 : (y > maxY ? maxY : y);
 }
@@ -6784,7 +6850,7 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     if (self.renderW <= 0 || self.chatBaseX <= 0) return CGRectNull;   // not placed yet
     int chatX = [self clampChatX:self.chatBaseX + self.chatUserDX];
     int chatY = [self clampChatY:self.chatBaseY + self.chatUserDY];
-    return CGRectMake(chatX, chatY, kChatW, chatRowCanvasH() + kChatContentCanvasH);
+    return CGRectMake(chatX, chatY, hudPx(kChatW), chatRowCanvasH() + hudPx(kChatContentCanvasH));
 }
 
 - (void)overlayEditMoveChatToCanvasX:(int)x y:(int)y {
@@ -7627,7 +7693,11 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (BOOL)mapPoint:(CGPoint)p toGameX:(int *)gx toGameY:(int *)gy {
     UIImage *img = self.screen.image;
     CGFloat iw = img ? img.size.width : 0, ih = img ? img.size.height : 0;
-    if ((iw <= 0 || ih <= 0) && self.renderW > 0) { iw = self.renderW; ih = self.renderH; }  // GPU present: no UIImage
+    // GPU present: no UIImage
+    if ((iw <= 0 || ih <= 0) && self.renderW > 0) {
+        iw = self.renderW;
+        ih = self.visibleH;
+    }
     if (iw <= 0 || ih <= 0) return NO;
     CGRect b = self.screen.bounds;
     CGFloat scale = MIN(b.size.width / iw, b.size.height / ih);   // ScaleAspectFit
@@ -8941,7 +9011,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (void)scrollChatByDragDeltaY:(CGFloat)dy {
     CGFloat W = self.view.bounds.size.width;
     if (self.renderW <= 0 || W <= 0) return;
-    CGFloat canvasPerPt = (CGFloat)self.renderW / W;   // screen pt -> engine-canvas px
+    CGFloat canvasPerPt = (CGFloat)self.renderW / W / sHudScale; // screen pt -> the chat's own engine px
     self.chatScrollAccum += dy * canvasPerPt;
     int whole = (int)(self.chatScrollAccum < 0 ? ceil(self.chatScrollAccum) : floor(self.chatScrollAccum));
     if (whole == 0) return;
