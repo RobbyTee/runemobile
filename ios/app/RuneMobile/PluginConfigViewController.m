@@ -725,7 +725,7 @@ typedef NS_ENUM(NSInteger, MUINotifRow) {
     if (name.length == 0) return nil;
     BOOL collapsible = [s[@"collapsible"] boolValue];
     BOOL collapsed = [s[@"collapsed"] boolValue];
-    UIView *header = [[UIView alloc] init];
+    UIControl *header = [[UIControl alloc] init];
     header.tag = section;
     UILabel *lbl = [[UILabel alloc] init];
     lbl.translatesAutoresizingMaskIntoConstraints = NO;
@@ -741,9 +741,12 @@ typedef NS_ENUM(NSInteger, MUINotifRow) {
         [lbl.bottomAnchor constraintEqualToAnchor:header.bottomAnchor constant:-6],
     ]];
     if (collapsible) {
-        UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self
-                                                                              action:@selector(onSectionHeaderTap:)];
-        [header addGestureRecognizer:tap];
+        // A control rather than a tap recognizer, so VoiceOver reads it as a button that opens or closes.
+        [header addTarget:self action:@selector(onSectionHeaderTap:) forControlEvents:UIControlEventTouchUpInside];
+        header.isAccessibilityElement = YES;
+        header.accessibilityLabel = name;
+        header.accessibilityValue = collapsed ? @"Collapsed" : @"Expanded";
+        header.accessibilityTraits = UIAccessibilityTraitButton;
     }
     return header;
 }
@@ -753,8 +756,8 @@ typedef NS_ENUM(NSInteger, MUINotifRow) {
     return name.length ? 38.0 : 0.0001;
 }
 
-- (void)onSectionHeaderTap:(UITapGestureRecognizer *)g {
-    NSInteger section = g.view.tag;
+- (void)onSectionHeaderTap:(UIControl *)header {
+    NSInteger section = header.tag;
     if (section < 0 || section >= (NSInteger)self.sections.count) return;
     NSMutableDictionary *s = self.sections[section];
     BOOL collapsed = ![s[@"collapsed"] boolValue];
