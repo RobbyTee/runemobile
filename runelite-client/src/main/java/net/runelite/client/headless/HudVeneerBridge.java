@@ -2315,12 +2315,12 @@ public final class HudVeneerBridge
 	 *  is not achievable by editing the engine widgets: the engine hard-pins every orb/icon each frame (so they can't
 	 *  be rearranged to wrap a bigger globe) and the globe draw-area can only be resized, not repositioned (re-anchoring
 	 *  it desyncs the minimap raster and the terrain stops drawing), so resizing alone grows the globe into the fixed
-	 *  orbs. The size-only path is kept here for reference. Native-HUD layout is Classic (PreEoc 164) only. */
+	 *  orbs. The size-only path is kept here for reference. Native-HUD layout is Resizable - Modern (PreEoc 164) only. */
 	private static void applyMinimapScale(Client c, boolean preEoc, int scalePct)
 	{
 		if (!preEoc)
 		{
-			return;   // the native HUD veneer only supports the Classic resizable layout
+			return;   // the native HUD veneer only supports the Resizable - Modern layout
 		}
 		try
 		{

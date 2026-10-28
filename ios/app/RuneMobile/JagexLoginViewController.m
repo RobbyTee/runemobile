@@ -276,8 +276,8 @@ static NSString *const kLauncherUA =
     NSString *name  = a[@"displayName"] ?: @"";
     [self log:[NSString stringWithFormat:@"✓ selected %@", name.length ? name : @"(unnamed)"]];
     // Release WebKit BEFORE the JVM is launched: tearing the web view down lets its WebContent/Networking
-    // helper processes (and the memory + any fault handlers they carry) go away, so the subsequent
-    // Start JVM runs as if from a clean launch. Lingering WebKit state is the leading suspect for the
+    // helper processes (and the memory + any fault handlers they carry) go away, so the JVM started
+    // afterwards (Tap to Play) runs as if from a clean launch. Lingering WebKit state is the leading suspect for the
     // same-session JVM crash — this is the in-app equivalent of the force-quit workaround.
     [self teardownWeb];
     if (self.onComplete) self.onComplete(sessionId, accId, name, accounts);

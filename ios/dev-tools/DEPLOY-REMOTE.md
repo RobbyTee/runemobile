@@ -63,8 +63,8 @@ ios/dev-tools/deploy-remote.sh --remote-jars  # build the jars on the remote (se
 ```
 
 Then on the phone: attach **StikDebug**, launch RuneMobile (the per-launch JIT attach is a phone-side tap
-and cannot be automated). GPU mode = two-finger long-press the launch button; one-finger = L1 kill-test;
-tap = CPU path.
+and cannot be automated), and tap **Tap to Play**. The renderer is the one picked in the plugins panel (CPU,
+GPU or 117 HD); there is no launch gesture for it.
 
 ## Notes / tuning
 - First `rsync` is large (the ~166 MB JRE rides along once); subsequent runs are deltas only.

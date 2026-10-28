@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # build-release-artifacts.sh — build the shippable RuneMobile APK + IPA in one pass, ready to publish.
 #
-# This script IS the build (the CI workflow, .github/workflows/runemobile-release.yml, is a thin wrapper that
+# This script IS the build (the CI workflow, .github/workflows/release-hosted.yml, supplies its inputs and
 # calls it — same "script is the source of truth" convention as android/dev-tools/ci/release-gate.sh). It is
 # fully runnable on a developer Mac, so the pipeline has real, reproducible evidence outside GitHub Actions.
 #
@@ -14,7 +14,8 @@
 #   runelite-jit.js            the StikDebug JIT launch template, copied verbatim
 #   manifest.env              version / sha / apk fingerprint, sourced by publish-rolling-release.sh
 #
-# Secrets stay in $HOME, never in the repo or in GitHub secrets. Config is read from $CI_CONFIG_DIR
+# Secrets never live in the repo: on a Mac they stay in $HOME, and in CI the release-hosted workflow writes them
+# from its GitHub secrets. Config is read from $CI_CONFIG_DIR
 # (default ~/.runemobile-ci): keystore.properties, signing.env (DEVELOPMENT_TEAM), keychain.pw.
 # See tools/ci/README.md for the one-time setup.
 #

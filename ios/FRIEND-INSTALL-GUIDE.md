@@ -17,7 +17,7 @@ computer step. After that you install the app and run it from your phone.
 - A **computer** (Windows / Mac / Linux) **once**, plus a USB cable.
 - An **Apple ID** (a throwaway one is fine).
 - A **throwaway OSRS account.**
-- Two files I'll send you: the app **`RuneLite.ipa`** and a small script **`runelite-jit.js`**.
+- Two files I'll send you: the app (an **`.ipa`** file) and a small script **`runelite-jit.js`**.
 
 > Heads up on naming: once installed, the app's icon is labelled **RuneMobile** (not "RuneLite"). That's
 > the name to look for on your Home Screen and in StikDebug's app list.
@@ -45,7 +45,7 @@ SideStore is the app that installs and re-signs other apps using *your own* Appl
 
 ## Step 3 — Install the game
 
-1. In SideStore, tap **＋** (top corner) → choose the **`RuneLite.ipa`** I sent you.
+1. In SideStore, tap **＋** (top corner) → choose the **`.ipa`** I sent you.
 2. SideStore signs it with your Apple ID and installs it. The icon (labelled **RuneMobile**) lands on
    your Home Screen.
 

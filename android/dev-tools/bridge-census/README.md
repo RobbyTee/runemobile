@@ -1,9 +1,9 @@
 # A-1 — bridge/flag census
 
-The first Android phase (see `android/PORT-PHASING.md` §3 Phase A-1). Proves, before any UI is built, that the
-shared Java seam the A0–A8 mainline rides on is actually present and callable — so "almost no new *shared* Java"
-is evidence, not assumption. **Both halves are now GREEN: A-1a (below) proves *static resolution*; A-1b
-(`../a1b-gatecensus`) proves each `-D` gate flips its bridge inert→active at runtime under a booted engine.**
+The first Android phase (A-1). Proves, before any UI is built, that the shared Java seam the A0–A8 mainline rides
+on is actually present and callable — so "almost no new *shared* Java" is evidence, not assumption. **Both halves
+are now GREEN: A-1a (below) proves *static resolution*; A-1b (`../a1b-gatecensus`) proves each `-D` gate flips its
+bridge inert→active at runtime under a booted engine.**
 
 Two halves:
 
@@ -12,25 +12,29 @@ Two halves:
 initializer** (so no CACIO/AWT activation is needed) and checks that every method in the expected contract
 resolves in the embedded shaded jar, matched by name + ordered parameter simple-type names.
 
-Run on desktop OpenJDK 21 against the Android-staged jar:
+Run on desktop OpenJDK 21 against the shaded client jar (Android no longer stages one, so it is not read from
+`assets/jvm/`):
 
 ```
-./run-census-desktop.sh                 # defaults to android/app/src/main/assets/jvm/<client-shaded>.jar
-./run-census-desktop.sh /path/to.jar    # or check any staged copy
+./run-census-desktop.sh                 # runelite-client/build/libs/client-<project.build.version>-shaded.jar,
+                                        #   else ios/app/jvm-resources/client-shaded.jar
+./run-census-desktop.sh /path/to.jar    # or check any other copy
 ```
 
-**GREEN baseline (jar `client-1.12.29-SNAPSHOT-shaded`):**
+**GREEN baseline (2026-10-27, jar `client-1.13.5-SNAPSHOT-shaded`):**
 
 ```
-BRIDGE_CENSUS verdict=GREEN resolved=79 missing=0 total=79
-census_md5=fd2c599160bfe1da1323709f02378286
+BRIDGE_CENSUS verdict=GREEN resolved=84 missing=0 total=84
+census_md5=1003384ce027a9f658ff7ea2181da370
+ANDROID_BRIDGE_CENSUS_GREEN md5=1003384ce027a9f658ff7ea2181da370
 ```
 
-The sentinel md5 is over the sorted `RESOLVED/MISSING` block, so a jar update that changes the bridge surface
-flips the md5 — re-run and reconcile. (Restaged 1.12.28→**1.12.29** on 2026-06-07; the md5 is **unchanged**,
-confirming the bridge surface is identical across that bump. The runner globs `client-*-shaded.jar`, so it
-follows the staged version automatically.) If the contract array in `BridgeCensus.java` falls behind the bridges,
-the census under-reports; keep it in sync with `runelite-client/.../headless/*` (the source of truth).
+The sentinel md5 is over the sorted `RESOLVED/MISSING` block, so a jar update that changes the bridge surface flips
+the md5 — re-run and reconcile; so does a change to the contract array itself. The runner reads
+`project.build.version` from `gradle.properties` and checks that version's jar, so it follows a version bump
+without edits (it does not glob, which would pick the oldest jar in `build/libs`). If the contract array in
+`BridgeCensus.java` falls behind the bridges, the census under-reports; keep it in sync with
+`runelite-client/.../headless/*` (the source of truth).
 
 ## A-1b — runtime gate-flip census (emulator; DONE / GREEN)
 The static half proves the methods exist; it does **not** prove each `-D` gate flips the bridge from inert to

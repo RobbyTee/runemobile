@@ -10,7 +10,8 @@ Python stdlib for the protocol, plus PIL + numpy (only for `image_diff`,
 
 The server is pinned to the macOS system Python because that is the interpreter
 that ships PIL (11.x) + numpy on this machine — Homebrew's `python3` does not have
-them. `image_diff` and `ios_sim_screenshot` need both; everything else is stdlib. If you move machines,
+them. `image_diff` and `ios_sim_screenshot` import both, and `ios_sim_screens` runs `sim-screens.py` under the
+server's own interpreter, which imports them too; everything else is stdlib. If you move machines,
 point `.mcp.json` at whatever `python3` has `PIL` + `numpy`
 (`python3 -c "import PIL, numpy"` must succeed) and fix the absolute script path.
 

@@ -136,8 +136,8 @@ android {
         }
     }
 
-    // A4: Jetpack Compose for the data-driven plugin UI (the live overlays stay classic Views — see
-    // PORT-PHASING.md §4.2 hybrid decision).
+    // A4: Jetpack Compose for the data-driven plugin UI (the live overlays stay classic Views — a
+    // deliberate hybrid).
     buildFeatures {
         compose = true
         buildConfig = true // A8: BuildConfig.DEBUG gates dev-only logging (stdio pipe, token PII, ext storage)
@@ -299,8 +299,10 @@ tasks.matching { it.name == "mergeDebugAssets" || it.name == "mergeReleaseAssets
 // Exec-wraps the existing tracked staging script (the shared :client jar lives in the SEPARATE root build, so it is
 // reached via a nested `./gradlew :client:shadowJar`, not a cross-build dependsOn). Every task is
 // onlyIf{ its own output is absent } — so an incremental build (artifacts already staged) SKIPS all of them with
-// zero overhead, and only a fresh tree pays the cost. A shared headless/ change still needs a manual re-stage
-// (delete the jars/runtime.tag or run `:app:stageBootAssets`); verifyReleaseBootAssets is the backstop.
+// zero overhead, and only a fresh tree pays the cost. A shared headless/ change (or a same-version upstream merge)
+// still needs a manual re-stage, README steps 2-6: running `:app:stageBootAssets` skips on the same guards, and
+// deleting only the staged jars re-derives them from the stale shaded jar. verifyReleaseBootAssets catches only
+// MISSING artifacts, not stale ones.
 val repoRoot: File = rootDir.parentFile
 val jvmAssets = file("src/main/assets/jvm")
 val clientLibs = File(repoRoot, "runelite-client/build/libs")

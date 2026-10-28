@@ -34,9 +34,10 @@ These are accepted, documented behaviors — list the ones true for the build be
 - **Reconnect is a re-login, not a seamless resume.** A network drop beyond the in-game reconnect
   window returns you to the login screen; logging back in restores the session. No game state is lost
   server-side.
-- **Backgrounding drops the game session.** Sending the app to the background (or locking the screen)
-  pauses the client; on return you may need to log in again, and the **first** resume-login can
-  occasionally need one retry.
+- **Backgrounding on Android can drop the game session.** In the background the Android app idles at a
+  slow tick to save battery, and the connection may be cut; on return the automatic re-login runs, and the
+  **first** resume-login can occasionally need one retry. iOS keeps the game running in the background
+  (a silent audio session plus Picture-in-Picture) while you're logged in.
 - **Sustained heavy load lowers 117HD resolution.** Under thermal pressure the 117HD renderer steps
   its scene-resolution scale down and restores it on cooldown (by design — keeps the frame rate up).
 - **JIT attach (iOS only).** iOS requires re-attaching the debugger (StikDebug) per launch to enable
@@ -56,9 +57,16 @@ Release builds are signed with a dedicated key (not the debug key). The signing 
 
 Every published APK should carry this fingerprint (verify with
 `apksigner verify --print-certs <apk>`); a build that doesn't is not a genuine release. **Update-in-place
-only works between APKs signed by this same key** — see the rotation warning in `keystore.properties.example`.
+only works between APKs signed by this same key** — see the rotation warning in
+[`android/keystore.properties.example`](android/keystore.properties.example).
 The key material lives outside the repo and is never committed; keep the keystore **and** its password
 backed up (a lost key means future updates require users to uninstall + reinstall).
+
+The build reads the key through `android/keystore.properties` (gitignored; copy the example and fill it in),
+whose `storeFile` resolves relative to `android/`; without that file a release build falls back to the debug
+key. In CI, `.github/workflows/release-hosted.yml` builds that file from its `ANDROID_KEYSTORE_PROPERTIES` and
+`ANDROID_KEYSTORE_B64` secrets, and `tools/ci/build-release-artifacts.sh` (with `REQUIRE_RELEASE_KEY=1`)
+refuses an APK that doesn't carry the certificate above.
 
 ## Versioning
 

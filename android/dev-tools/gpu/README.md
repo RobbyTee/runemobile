@@ -1,7 +1,6 @@
 # Track G — GPU rendering (base `gpu`, then 117HD)
 
-The canonical, source-verified plan is [`android/GPU-TRACK-PLAN.md`](../../GPU-TRACK-PLAN.md). This directory holds
-the **AG1a** deliverable: the facade-bind EGL smoke that is the cheapest GPU go/no-go.
+This directory holds the **AG1a** deliverable: the facade-bind EGL smoke that is the cheapest GPU go/no-go.
 
 ## What AG1a proves
 
@@ -11,7 +10,7 @@ LWJGL classifier** (`runelite-client/build.gradle.kts:93-94`), so the approach (
 *replace* real LWJGL with a pure-Java facade + a native EGL `.so`. AG1a stands that up on Android and asserts the
 gate is satisfiable, headless, on a live EGL/GLES context — **before** any plugin wiring.
 
-## Pieces (all on the `android` branch)
+## Pieces
 
 | File | What |
 |---|---|
@@ -41,9 +40,9 @@ ANDROID_AG1A OpenGL33=true createProgram=1 fbo=1 bufMode=36064 glErrAfterProg=0 
 ANDROID_AG1A VERDICT=PASS
 ```
 
-(`evidence/ag1a-emulator-verdict-20260608.log`.) The librlawt EGL context comes up, `OpenGL33==true` resolves
-through the facade, a real `glCreateProgram()` returns non-zero, and the shims (`glClearDepth`, `glClipControl`)
-run clean — so the facade link + EGL bring-up + RegisterNatives completeness all hold.
+The librlawt EGL context comes up, `OpenGL33==true` resolves through the facade, a real `glCreateProgram()` returns
+non-zero, and the shims (`glClearDepth`, `glClipControl`) run clean — so the facade link + EGL bring-up +
+RegisterNatives completeness all hold.
 
 ## ⚠ This is NOT AG1-GREEN
 
@@ -51,7 +50,7 @@ The emulator is **ANGLE → SwiftShader** (`GL_RENDERER` confirms) — lenient, 
 driver. AG1a closes the *easy ~75%*. The coin-flip (**AG1b**, ~50%, the project-wide GPU go/no-go) is **device-only**:
 the real base shaders compiling/linking/**`glValidateProgram`**-ing on a real Adreno/Mali driver, under the real
 `DeviceHeadlessBoot`/`JNI_CreateJavaVM` HotSpot render thread, against the live CACIO canvas, producing one frame.
-Run that on a real device (BrowserStack). See `android/GPU-TRACK-PLAN.md` §AG1 + the OPEN questions.
+Run that on a real device (BrowserStack).
 
 ## AG2.5-b — 117HD (RLHD) class-load + loader probe (GREEN, emulator, 2026-06-08)
 
@@ -72,10 +71,9 @@ ANDROID_RLHD_PROBE loaderJson parsed=9/9
 MEGAVERDICT = ANDROID_RLHD_PROBE_GREEN
 ```
 
-(`evidence/ag25b-rlhdprobe-emulator-20260608.log`.) Proves the OpenCL stub + Zone facade delta resolve at
-class-load (no NoClassDefFound) and the loader data ships + parses on-device. The full `HdPlugin.startUp` (typed
-loader data-load + GL/VAO/UBO/shader init against a live EGL context) is AG3 — it exercises the librlawt GL-delta
-forwarders, which this class-load probe does not.
+This proves the OpenCL stub + Zone facade delta resolve at class-load (no NoClassDefFound) and the loader data
+ships + parses on-device. The full `HdPlugin.startUp` (typed loader data-load + GL/VAO/UBO/shader init against a
+live EGL context) is AG3 — it exercises the librlawt GL-delta forwarders, which this class-load probe does not.
 
 ## The `fps-phase*.csv` captures (June 2026)
 

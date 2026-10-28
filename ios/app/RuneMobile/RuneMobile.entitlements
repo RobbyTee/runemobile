@@ -10,8 +10,8 @@
 	   - macOS hardened-runtime keys (com.apple.security.cs.allow-jit, etc.) are no-ops
 	     on iOS device — intentionally absent.
 	   - Request ONLY memory headroom. AltStore 2.2+ injects this on a free cert.
-	   - Hello itself needs little RAM; if a direct/free-cert sign REJECTS this key,
-	     drop it for the Hello milestone (it is only needed once RuneLite is loaded).
+	   - RuneLite needs this headroom: the default memory cap is too small once the
+	     client loads.
 	-->
 	<key>com.apple.developer.kernel.increased-memory-limit</key>
 	<true/>

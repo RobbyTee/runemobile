@@ -31,9 +31,10 @@ build. A new screen, or a new Mac, has no golden yet; the run says `NO_GOLDEN` u
    `hello-shell.log`. The script then waits the screen's `settle` time and takes the screenshot.
 4. Each shot is compared with `ios/app/evidence/sim-golden/<simulator model>/<facing>/<screen>.png`, where
    `<facing>` is `LandscapeLeft` or `LandscapeRight`, the way Simulator.app has the window turned. A screen passes when
-   at most `maxPctDiffering` % of its pixels differ by more than `threshold` in any channel. The defaults are 2
-   and 0: the compositor's antialiasing on rounded corners can come out one level off between launches, while a
-   changed word differs by about 200. A failing screen gets a `.diff.png` heatmap next to its shot.
+   at most `maxPctDiffering` % of its pixels differ by more than `threshold` in any channel. The defaults are a
+   `threshold` of 2 and a `maxPctDiffering` of 0: the compositor's antialiasing on rounded corners can come out
+   one level off between launches, while a changed word differs by about 200. A failing screen gets a
+   `.diff.png` heatmap next to its shot.
 
 Shots, heatmaps and `summary.json` land in `ios/app/evidence/sim-screens/<stamp>/`.
 
@@ -42,9 +43,9 @@ All of the driver code is compiled only into simulator builds (`TARGET_OS_SIMULA
 ## Screens
 
 `screens.json` lists them in order: `settings`, `about`, `plugins`, `edit-controls`, `overlays`, `profiles`,
-`infoboxes`, and the plugin side panels `panel:Info`, `panel:Notes`, `panel:Hiscore` and `panel:Grand Exchange`
-(`panel:<rail tooltip>` opens any panel on the rail). `hub` shows the live Plugin Hub list, which changes whenever
-the hub publishes, so it is marked `network` and runs only when named.
+`infoboxes`, and the plugin side panels `panel:Info`, `panel:Notes`, `panel:Hiscore`, `panel:Grand Exchange` and
+`panel:XP Tracker` (`panel:<rail tooltip>` opens any panel on the rail). `hub` shows the live Plugin Hub list,
+which changes whenever the hub publishes, so it is marked `network` and runs only when named.
 
 Panels that only exist in game (`World Hopper`, `Loot Tracker` and the like) are left out, because the run is
 logged out.

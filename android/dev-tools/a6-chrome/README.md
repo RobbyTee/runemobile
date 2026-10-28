@@ -7,7 +7,7 @@ relocated to the top**. Like A4/A5, it rides shared bridges already in the jar �
 - **`MobileChromeBridge`** (gate `-Drunelite.mobilechrome=true`) — read-only `getSnapshot()` → per-frame
   escaped JSON of the tab-stone / side-panel / minimap / orb / chat / viewport **canvas bounds**, the active
   tab, and `topLevelId` (the layout guard). The native grid reads this each display tick for the active-tab
-  highlight + to know when to engage (only the Classic/PRE_EOC layout, toplevel 164).
+  highlight + to know when to engage (only the resizable modern layout, `TOPLEVEL_PRE_EOC`, toplevel 164).
 - **`HudVeneerBridge`** (gate `-Drunelite.hudveneer=true`) — the chrome **write** surface:
   `setStonesHidden(true)` hides all 14 engine tab stones (the native grid replaces them), `openTab(i)` opens a
   tab by replaying its stone op script (works while hidden — no widget moved or covered), and
@@ -47,26 +47,26 @@ ANDROID_A6_SEAM_GREEN chrome read resolved: rootKind=PRE_EOC resized=true topLev
   activeTab=-1 viewport=true tabsNonNull=14/14 sidePanel=false minimap=true orbs=true chat=true
 ```
 
-**Key finding:** with the gamepack forced into RESIZABLE display mode (A7, `preferences.dat` byte[3]=2) the
-chrome read surface resolves in the **mobile Classic/PRE_EOC layout (toplevel 164)** at the full screen canvas
-(1280×720) — all 14 tab stones, the viewport, minimap/orbs/chat. `topLevelId == 164` is the native grid's
-engage condition (the iOS LAYOUT GUARD): the `TAB_GRID_ORDER` stone indices map to real PRE_EOC stones, so the
-grid only takes over there. (Earlier, before A7, the seam resolved FIXED 765×503 / toplevel 548 — the
-cover-and-proxy approach used then; the 2-col grid replaced it once resizable unblocked the mobile layout.)
+**Key finding:** with the gamepack forced into RESIZABLE display mode (A7, `preferences.dat` byte[3]=2) the chrome
+read surface resolves in the **resizable modern layout (`TOPLEVEL_PRE_EOC`, toplevel 164)** at the full screen
+canvas (1280×720) — all 14 tab stones, the viewport, minimap/orbs/chat. `topLevelId == 164` is the native grid's
+engage condition (the iOS LAYOUT GUARD): the `TAB_GRID_ORDER` stone indices map to real PRE_EOC stones, so the grid
+only takes over there. (Earlier, before A7, the seam resolved FIXED 765×503 / toplevel 548 — the cover-and-proxy
+approach used then; the 2-col grid replaced it once resizable unblocked the mobile layout.)
 
 ## UI gate (`check-a6ui.sh`) — native 2-col tab grid
 
 `ChromeOverlayView` is a full-screen interactive View stacked over the SurfaceView (below the menu overlay). A
 Choreographer tick reads the **render-thread-published** snapshot (`JvmLauncher.chromeSnapshotPub()` — lock-free,
-no HotSpot attach) for `loggedIn` / `topLevelId` / `activeTab`. In the supported Classic/PRE_EOC layout
-(toplevel 164) it hides the engine stones (`HudVeneerBridge.setStonesHidden(true)`, off the UI thread via the
-rl-bridge executor) and draws all 14 tabs as a 2-col × 7-row grid at the bottom-right (cells auto-fit the bottom
-~56% of the safe height so they never collide with the minimap). A tap that **starts on a cell** is consumed and
-opens that tab (`HudVeneerBridge.openTab(i)`); a tap elsewhere falls through to the game. The open side panel is
-relocated flush-left of the grid (`relocateSidePanel`). In any other layout the grid **disengages** —
-`setStonesHidden(false)` + the side panel is released — so the real engine HUD renders (the iOS LAYOUT GUARD).
-`-Drunelite.mobilechrome` + `-Drunelite.hudveneer` are now **always-on**; a `▦` button toggles the native grid
-(A/B vs the raw engine stones).
+no HotSpot attach) for `loggedIn` / `topLevelId` / `activeTab`. In the supported resizable modern layout
+(`TOPLEVEL_PRE_EOC`, toplevel 164) it hides the engine stones (`HudVeneerBridge.setStonesHidden(true)`, off the UI
+thread via the rl-bridge executor) and draws all 14 tabs as a 2-col × 7-row grid at the bottom-right (cells
+auto-fit the bottom ~56% of the safe height so they never collide with the minimap). A tap that **starts on a
+cell** is consumed and opens that tab (`HudVeneerBridge.openTab(i)`); a tap elsewhere falls through to the game.
+The open side panel is relocated flush-left of the grid (`relocateSidePanel`). In any other layout the grid
+**disengages** — `setStonesHidden(false)` + the side panel is released — so the real engine HUD renders (the iOS
+LAYOUT GUARD). `-Drunelite.mobilechrome` + `-Drunelite.hudveneer` are now **always-on**; a `▦` button toggles the
+native grid (A/B vs the raw engine stones).
 
 ```
 adb shell am start -n dev.audaro.runemobile/.MainActivity   # autologin in-world; grid draws once toplevel 164 loads

@@ -51,7 +51,7 @@ explicitly. Emergency bypass: `git commit --no-verify`.
 stage of the Android release gate** — `android/dev-tools/ci/release-gate.sh` runs it first and **fails on exit 2**
 (a removed/renamed/re-signatured entry that risks breaking the other port). The `release-hosted` workflow runs
 this same contract check as a non-bypassable pre-flight before it builds, so it also runs in CI. The pre-commit
-hook stays as the fast local pre-flight. See `android/GATE.md` row 6.
+hook stays as the fast local pre-flight.
 
 ## What it does and doesn't guarantee
 It catches contract **drift** at commit/gate time and forces a conscious cross-port check — it does not itself

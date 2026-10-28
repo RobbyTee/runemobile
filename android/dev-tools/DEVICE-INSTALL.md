@@ -22,15 +22,15 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradl
 #   debug   -> app/build/outputs/apk/debug/app-debug.apk      (verbose: pipes the VM's stdout/err to logcat)
 # or, for a clean signed build:
 JAVA_HOME=… ./gradlew :app:assembleRelease
-#   release -> app/build/outputs/apk/release/app-release.apk  (debug-key signed; NO stdio/token-PII logging)
+#   release -> app/build/outputs/apk/release/app-release.apk  (NO stdio/token-PII logging)
 ```
 
 Use **debug for the first run** (you'll want the `jvm-boot` / `jvm-stdout` logs if anything goes wrong); switch
 to **release** once it works. Both are no-minify — R8 stays OFF on purpose (the engine + headless bridges are
 resolved by name via JNI `FindClass` and RuneLite leans on reflection internally, so shrinking would break it;
-the size is dominated by the unshrinkable native JRE/jars anyway). Release is signed with the debug key — fine
-for personal sideload (this build is never shipped to others); swap in a real keystore in the `release`
-buildType if that ever changes.
+the size is dominated by the unshrinkable native JRE/jars anyway). Release is signed with the key that
+`android/keystore.properties` names (format in `keystore.properties.example`), or with the debug key when that
+file is absent.
 
 ## 2. Install + launch
 
@@ -46,15 +46,18 @@ the **login screen** (or the in-app login, step 3).
 ## 3. Log in
 
 **Option A — in-app (the normal path).** With no `tokens.json`, the app routes to the on-device Jagex login
-(WebView OAuth) before boot; or tap the **`⎆`** button to switch account. Complete the Jagex consent/login in
-the WebView, pick the character — it writes `tokens.json` to internal `filesDir` and restarts into a clean boot
-(`JNI_CreateJavaVM` snapshots the `JX_*` env at startup, so a restart is required after writing tokens).
+before boot; to switch account later, tap the **Account** (`⎆`) tile in the plugin launcher. Tap **Open Jagex
+login**: the consent page opens in a Chrome Custom Tab (Cloudflare's human check blocks Android's WebView there).
+After you sign in, Chrome lands on a `http://localhost/#id_token=…` page that says "refused to connect" — that's
+expected. Copy its link (Share, then Copy) and go back: the app reads it from the clipboard (or paste it and tap
+**Import login link**). Pick the character — it writes `tokens.json` to internal `filesDir` and restarts into a
+clean boot (`JNI_CreateJavaVM` snapshots the `JX_*` env at startup, so a restart is required after writing tokens).
 
 **Option B — push tokens directly (dev shortcut, DEBUG builds only).** If you already have a `tokens.json`
 (e.g. from `ios/dev-tools/fetch-shield-tokens.sh`):
 
 ```
-# internal filesDir (works for debug AND release):
+# internal filesDir (run-as needs a debuggable build):
 cat tokens.json | adb shell run-as dev.audaro.runemobile tee files/tokens.json > /dev/null
 # OR the app's external files dir (DEBUG builds only — release ignores external storage by design):
 adb push tokens.json /sdcard/Android/data/dev.audaro.runemobile/files/tokens.json
@@ -92,7 +95,7 @@ A `--ez census true` intent extra additionally runs the A4/A5/A6 seam self-tests
 |---|---|
 | `INSTALL_FAILED_NO_MATCHING_ABIS` | device isn't `arm64-v8a` (32-bit only) — unsupported. |
 | App installs, black screen, no `jvm-boot` VM-up | the VM didn't come up — check `dlopen` of `libjvm.so` (Q11 §4); confirm the JRE unpacked (`adb shell run-as dev.audaro.runemobile ls files/jvm/jre/lib/server/`). |
-| Boots but stuck on login | no usable `tokens.json` (or release build can't see externally-pushed tokens — use the internal `run-as` push). |
+| Boots but stuck on login | no usable `tokens.json`. A release build ignores pushed tokens and refuses `run-as`, so log in in-app. |
 | Release build: no logs at all | expected — release does **not** pipe the VM's stdout/err to logcat (A8 hardening). Use the debug build to debug. |
 | Soft keyboard / haptics dead | check the `VIBRATE` permission is granted (it's in the manifest) and the IME shows on a chat tap. |
 
@@ -100,5 +103,5 @@ A `--ez census true` intent extra additionally runs the A4/A5/A6 seam self-tests
 
 - **Soak:** leave it logged in for a few hours; watch memory/FPS under `-Xmx512m` (the VM is kept alive for the
   whole process). No leak/GC pathology = A8 soak GREEN.
-- **Packaging:** the release APK is already signed + installable. For real distribution (not the plan) you'd add
-  a dedicated keystore + first-run UX polish.
+- **Packaging:** the release APK is already signed + installable (with the `keystore.properties` key when one is
+  configured).

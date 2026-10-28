@@ -47,7 +47,7 @@ Do **not** hand-copy jars (that's how they drift). Stage in this order, from the
 the output of the one before.
 
 ```sh
-# Android (or ./gradlew :app:stageBootAssets for all of it; see android/README.md)
+# Android (./gradlew :app:stageBootAssets does all of it, but only on a fresh clone; see android/README.md)
 ./gradlew :client:shadowJar
 ( cd ios/app && ./build-probes.sh )
 android/dev-tools/gpu/stage-android-gpu-jar.sh            # -> client-<ver>-gpu.jar
@@ -106,13 +106,19 @@ or script header, not its name.
 There is intentionally **no `shared/` Gradle module and no umbrella build** — that would drag AGP/SDK
 assumptions into normal RuneLite work and fight upstream mergeability for little gain. The shared edge is held
 by convention, not compile-time walls. Code that crosses the JVM↔host boundary
-(e.g. [`Hooks.java`](runelite-client/src/main/java/net/runelite/client/callback/Hooks.java)) falls into three
+(e.g. [`Hooks.java`](runelite-client/src/main/java/net/runelite/client/callback/Hooks.java)) falls into four
 kinds — keep them distinguishable:
 
 - **production shared** — facades both ports call (render, touch, click). Lives in `net.runelite.client.headless.*`.
+- **production boot** — the entry points both ports run at every launch, despite living in
+  `ios/dev-tools/awtsmoke/`: `UnsafePokeActivation.activate()` installs CACIO before anything touches
+  `java.awt`, and `DeviceHeadlessBoot.main` boots RuneLite. iOS (`JVMLauncher.m`) calls `DeviceHeadlessBoot`,
+  which activates first; Android (`jvm_bootstrap.cpp`) activates, publishes the bridge, then calls the same
+  `main`. Build front door is `ios/app/build-probes.sh`; folded into `probes.jar`. Both are in the contract
+  baseline.
 - **desktop probe** — mutating spikes gated behind system properties, used for desktop A/B bring-up
-  (`UnsafePokeActivation`, `DeviceHeadlessBoot`). Build front door is `ios/app/build-probes.sh`; folded into
-  `probes.jar`. New probe classes should land under a `headless.probe` package, still inside `runelite-client`.
+  (`ChatRelocateProbe`, `WelcomePlayProbe`). New probe classes should land under a `headless.probe` package,
+  still inside `runelite-client`.
 - **host-specific native** — never shared. iOS Objective-C + Android Kotlin/C++. The two `fake-xawt` builds
   stay **separate** on purpose — the platform link rules differ materially (Mach-O `libawt_xawt.dylib` vs
   bionic `libawt_xawt.so` with `DT_NEEDED libawt_headless.so`).

@@ -65,8 +65,7 @@ Three more sources are compiled into the app straight from `ios/dev-tools/`: `gp
 `gpu-routec/jni/routec_gl_jni.m` (the GL forwarders behind RuneLite's GPU plugin) and
 `gpu-zone/jni/routec_zone_jni.m` (the extra natives 117 HD needs). A change there is an app change.
 
-[`ios/app/README.md`](../../ios/app/README.md) dates from the first milestone and describes an older launcher;
-trust this page and the code where they differ.
+[`ios/app/README.md`](../../ios/app/README.md) is a short map of that directory.
 
 ## The Xcode project
 
@@ -261,8 +260,10 @@ iOS lets a process create executable memory only while a debugger is attached, a
 Trusted Execution Monitor (TXM) even that memory has to be mapped by the debugger. The patched JRE runs with
 `-XX:+MirrorMappedCodeCache`: when HotSpot wants code-cache memory it executes `brk #0x69` with the size in `x0`.
 StikDebug, the on-device debugger, runs [`runelite-jit.js`](../../ios/app/stikdebug/runelite-jit.js), which maps
-an RX region of that size, prepares it for execution and returns its address. The script also maps pages on an
-instruction-abort fault. [`ios/app/stikdebug/README.md`](../../ios/app/stikdebug/README.md) has the protocol
+an RX region of that size, prepares it for execution and returns its address. libjvm reserves the whole code
+cache in that one call, so the script serves one request and then detaches;
+[`patch-jre-txm.sh`](../../ios/dev-tools/patch-jre-txm.sh) patches libjvm so it always takes this path.
+[`ios/app/stikdebug/README.md`](../../ios/app/stikdebug/README.md) has the protocol
 details.
 
 ### What the user does each launch

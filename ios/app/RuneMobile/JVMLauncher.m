@@ -1201,12 +1201,12 @@ static void resetSignalHandlers(void) {
 
 // ───────────────────── Same-session login-crash diagnostics (Phase 6) — STRIP AFTER DIAGNOSIS ─────────────────────
 // Symptom: opening the Jagex login WKWebView earlier in the SAME app session crashes the JVM natively
-// right after RuneLite init; a force-quit + relaunch before Start JVM reaches the game cleanly. The two
+// right after RuneLite init; a force-quit + relaunch before Tap to Play reaches the game cleanly. The two
 // obvious causes are ALREADY defended (resetSignalHandlers() wipes WebKit's POSIX SIGSEGV/SIGBUS handlers;
 // the §6.2 clear drops the task EXC_BAD_ACCESS Mach port), so this dumps the *actual* runtime state to the
 // crash-safe stderr fd (Documents/jvm-stdio.log — dup2'd UNBUFFERED, so it survives even a silent jetsam
-// kill). Run twice and diff: (A) fresh launch → Start JVM (clean baseline) vs (B) fresh launch → Log in →
-// Start JVM (the crash case). What differs pins the cause:
+// kill). Run twice and diff: (A) fresh launch → Tap to Play (clean baseline) vs (B) fresh launch → Log in →
+// Tap to Play (the crash case). What differs pins the cause:
 //   • a non-null BAD_ACCESS port (task or thread) in B → WebKit's JavaScriptCore is stealing HotSpot's
 //     null-check/safepoint faults (exception-port path) → the thread-level clear below should fix it;
 //   • a "custom" SIGSEGV handler surviving into B → a POSIX-handler shadow we're not resetting;
@@ -1668,14 +1668,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     }
 }
 
-// Force the OSRS gamepack into the RESIZABLE - CLASSIC layout before the VM boots. The engine persists the
+// Force the OSRS gamepack into the resizable PRE_EOC layout (Resizable - Modern) before the VM boots. The engine persists the
 // display settings client-side in preferences.dat: byte[3] is the window mode (1 = fixed/classic,
-// 2 = resizable) and byte[1] is the resizable arrangement (0 = classic/PRE_EOC, 1 = modern/OSRS_STRETCH,
-// mirrored live by VarbitID.RESIZABLE_STONE_ARRANGEMENT; see MobileChromeBridge). Our entire native HUD is
-// gated on the resizable-Classic root (isResized() + PRE_EOC toplevel 164): an account last saved in the
-// desktop "Fixed - Classic" layout would boot pillarboxed (765x503, brown border), and one saved in
-// resizable-Modern lands on the unsupported 161/165 root. Pin BOTH control bytes each launch (leaving the
-// user's audio/brightness bytes untouched). Byte values verified against the Android classic seed vs a live
+// 2 = resizable) and byte[1] is the resizable arrangement (0 = PRE_EOC, the value pinned here; the game
+// reports the arrangement live as VarbitID.RESIZABLE_STONE_ARRANGEMENT, where 1 = PRE_EOC; see MobileChromeBridge).
+// Our entire native HUD is gated on the PRE_EOC root (isResized() + toplevel 164, Resizable - Modern): an account
+// last saved in the desktop "Fixed - Classic" layout would boot pillarboxed (765x503, brown border), and one
+// saved in Resizable - Classic lands on the unsupported 161/165 root. Pin BOTH control bytes each launch (leaving the
+// user's audio/brightness bytes untouched). Byte values verified against the Android seed vs a live
 // device pull. Mirrors the Android ensureResizableDisplayMode path. rlHome == user.home; the gamepack cache
 // lives at user.home/.runelite/jagexcache/oldschool/LIVE (see RuneLite.copyJagexCache).
 static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
@@ -1691,7 +1691,7 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
                 bytes[3] = 0x02;
                 changed = YES;
             }
-            if (bytes[1] != 0x00) { // arrangement -> classic (PRE_EOC)
+            if (bytes[1] != 0x00) { // arrangement -> PRE_EOC (Resizable - Modern)
                 bytes[1] = 0x00;
                 changed = YES;
             }
@@ -1706,8 +1706,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
                                       withIntermediateDirectories:YES
                                                        attributes:nil
                                                             error:nil];
-            // Minimal valid OSRS preferences.dat: window mode = resizable (byte[3]=02), arrangement = classic
-            // (byte[1]=00). Matches the Android classic seed.
+            // Minimal valid OSRS preferences.dat: window mode = resizable (byte[3]=02), arrangement = PRE_EOC
+            // (byte[1]=00). Matches the Android seed.
             // clang-format off
             const uint8_t seed[] = {
                 0x0c, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00,

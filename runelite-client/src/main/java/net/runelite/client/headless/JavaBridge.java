@@ -66,7 +66,7 @@ import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.ui.overlay.outline.ModelOutlineRenderer;
 
 /**
- * Phase-4 (W3) sub-goal B: the native&lt;-&gt;Java facade for a <em>real interactive</em> client on iOS.
+ * Phase-4 (W3) sub-goal B: the native&lt;-&gt;Java facade for a <em>real interactive</em> client on both ports.
  *
  * <p>This is the one class the native shell calls into via reverse JNI. It exposes two seams:
  * <ul>
@@ -74,7 +74,7 @@ import net.runelite.client.ui.overlay.outline.ModelOutlineRenderer;
  *       {@link #getFramePixels()} hand the engine's composited {@code mainBufferProvider} pixels straight
  *       to the native side each screen refresh. This replaces the §6.2 PNG-capture-to-disk display path
  *       (which was choppy, disk-bound and budget-capped) with a direct, smooth blit.</li>
- *   <li><b>Touch ingress</b> — {@link #onTouch(int, int, int, int)} turns a UIKit touch (already mapped to
+ *   <li><b>Touch ingress</b> — {@link #onTouch(int, int, int, int)} turns a native touch (already mapped to
  *       game coordinates by the native side) into AWT {@link MouseEvent}s posted to the toolkit
  *       {@link EventQueue} with the gamepack {@link Canvas} as source. Sub-goal A proved the on-device CTC
  *       EventQueue accepts off-window posts, so this is the same proven path HeadlessLogin uses, now driven
@@ -86,10 +86,14 @@ import net.runelite.client.ui.overlay.outline.ModelOutlineRenderer;
  * Entirely inert unless {@code -Drunelite.bridge=true}, so it adds nothing to the stock desktop client.
  *
  * <p>Thread model: {@code register} runs on the engine/AWT thread; the native side calls the getters,
- * {@link #onTouch} and {@link #onClick} from the UI thread (JNI-attached). {@code onTouch} hands its posts
- * to the client thread so a drag's events stay in order behind the tap work queued there before them.
- * {@code EventQueue.postEvent} is thread-safe, and the pixel array is the buffer's live backing store —
- * reading it off-thread can momentarily tear, which is acceptable for a display.
+ * {@link #onTouch} and {@link #onClick} from its own JNI-attached threads (iOS: the UI thread, plus the
+ * Picture-in-Picture feed for the getters; Android: the render thread, which drains the touches the UI thread
+ * queues). {@code onTouch} hands its posts to the client thread so a drag's events stay in order behind the
+ * tap work queued there before them. {@code EventQueue.postEvent} is thread-safe. {@link #getFramePixels()}
+ * is not the buffer's live backing store: {@link #snapshot} (CPU) and the GPU readback
+ * ({@link #gpuFrameBackBuffer}/{@link #gpuPublish}) fill one of two buffers per complete frame and publish it,
+ * and a published buffer is not rewritten until two frames later, so a reader that copies it out within one
+ * engine frame of fetching it never sees a torn frame.
  *
  * <p><b>Input contract (Phase 5).</b> The native side owns gesture <em>recognition</em> (UIKit gesture
  * recognizers: tap, long-press, pan, pinch) and this facade exposes only the raw AWT primitives:
@@ -695,8 +699,9 @@ public final class JavaBridge
 	}
 
 	/**
-	 * The latest <em>complete</em> composited frame as packed {@code 0xAARRGGBB} ints (a stable snapshot,
-	 * not the live back buffer). Returns {@code null} before the first frame.
+	 * The latest <em>complete</em> composited frame as packed {@code 0x00RRGGBB} ints (a stable snapshot,
+	 * not the live back buffer; the top byte is not alpha, and both native readers draw the frame opaque).
+	 * Returns {@code null} before the first frame.
 	 */
 	public static int[] getFramePixels()
 	{

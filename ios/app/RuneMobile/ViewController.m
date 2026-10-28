@@ -326,9 +326,9 @@ static NSString *RMPasteLine(NSString *s) {
 @property (nonatomic, assign) BOOL awakeInGame;       // keep-awake: the last snapshot was logged in
 @property (nonatomic, assign) CFTimeInterval awakeLeftGameAt; // keep-awake: when loggedIn last fell (CACurrentMediaTime)
 @property (nonatomic, strong) RMPasteTarget *pasteTarget;     // the keyboard bar's Paste button target
-@property (nonatomic, assign) BOOL pendingRouteCL1;   // GPU Route C: long-press Start -> boot the L1 kill-test
-@property (nonatomic, assign) BOOL pendingRouteCGpu;  // GPU Route C: two-finger long-press -> full RuneLite on GPU
-@property (nonatomic, assign) BOOL pendingRouteCZone; // GPU Zone: three-finger long-press -> full RuneLite on 117HD
+@property (nonatomic, assign) BOOL pendingRouteCL1;           // GPU Route C L1 kill-test: nothing sets it any more (always NO)
+@property (nonatomic, assign) BOOL pendingRouteCGpu;          // full RuneLite on GPU: the renderer picked in the plugins panel
+@property (nonatomic, assign) BOOL pendingRouteCZone;         // full RuneLite on 117HD: the renderer picked in the plugins panel
 @property (nonatomic, assign) BOOL pendingRouteCGpuNoResize;  // GPU Route C bisection: skip headless.resize (fixed 765x503)
 @property (nonatomic, assign) BOOL pendingRouteCZoneDirect;   // GPU Zone: resizable + DIRECT present (CAEAGLLayer, no readback)
 
@@ -2761,7 +2761,7 @@ static const int kCamPitchPxPerSec = 200;
 
 // On-device Jagex login: present the embedded OAuth login, and on success persist the chosen character to
 // tokens.json — exactly the file loadJagexTokens (JVMLauncher) reads to arm autologin. Pure native (no
-// JVM), so this works before any StikDebug attach: log in here, then attach + Start JVM to play.
+// JVM), so this works before any StikDebug attach: log in here, then attach + Tap to Play.
 - (void)onLoginWithJagex {
     JagexLoginViewController *vc = [JagexLoginViewController new];
     vc.modalPresentationStyle = UIModalPresentationFullScreen;
@@ -2805,9 +2805,9 @@ static const int kCamPitchPxPerSec = 200;
                         options:(NSDataWritingAtomic | NSDataWritingFileProtectionComplete)
                           error:&err];
     [self appendLine:ok
-        ? [NSString stringWithFormat:@"[login] tokens.json written — logged in as %@. Attach StikDebug, then Start JVM.",
-           display.length ? display : @"(unnamed)"]
-        : [NSString stringWithFormat:@"[login] tokens.json write FAILED: %@", err.localizedDescription ?: @"?"]];
+                         ? [NSString stringWithFormat:@"[login] tokens.json written - logged in as %@. Attach StikDebug, then Tap to Play.",
+                                                      display.length ? display : @"(unnamed)"]
+                         : [NSString stringWithFormat:@"[login] tokens.json write FAILED: %@", err.localizedDescription ?: @"?"]];
 }
 
 // Reflect the saved login on the button title so the user can see they're signed in (and re-login if needed).
@@ -6417,9 +6417,9 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     [self appendLine:@"--- launching JVM on worker thread ---"];
 
     JVMLauncher *launcher = [[JVMLauncher alloc] init];
-    launcher.routecL1Mode = self.pendingRouteCL1;   // GPU Route C L1 kill-test (set by the long-press gesture)
-    launcher.routecGpuMode = self.pendingRouteCGpu;  // GPU Route C full path (two-finger long-press)
-    launcher.routecZoneMode = self.pendingRouteCZone; // GPU Zone 117HD path (three-finger long-press)
+    launcher.routecL1Mode = self.pendingRouteCL1;     // GPU Route C L1 kill-test (always NO now)
+    launcher.routecGpuMode = self.pendingRouteCGpu;   // GPU Route C full path (the plugins-panel renderer pick)
+    launcher.routecZoneMode = self.pendingRouteCZone; // GPU Zone 117HD path (the plugins-panel renderer pick)
     if (self.pendingRouteCL1) {
         [self appendLine:@"[shell] *** GPU Route C L1 kill-test — booting RouteCL1Probe (not full RuneLite) ***"];
     } else if (self.pendingRouteCZone) {

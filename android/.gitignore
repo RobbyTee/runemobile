@@ -8,7 +8,7 @@ app/.cxx/
 local.properties
 
 # Large / gitignored runtime assets (mirror ios/dev-tools) — staged into the APK, never committed:
-#   the embedded Android arm64 JRE (.so libs go in jniLibs, the rest in assets/jvm/jre)
+#   the embedded Android arm64 JRE (all of it, .so libs included, in assets/jvm/jre; never in jniLibs)
 app/src/main/jniLibs/
 app/src/main/assets/jvm/jre/
 #   the shaded RuneLite client jar + probes + CACIO jars + the staged content tag

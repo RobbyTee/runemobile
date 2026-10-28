@@ -83,8 +83,8 @@ same archive. Provenance is in
 `filesDir/jvm/jre/lib/server/libjvm.so` and the rest of `lib/*.so` by absolute path. If the same libraries also
 sit in `jniLibs/arm64-v8a/`, the linker resolves `libawt.so` by soname from the APK's library directory,
 `libawt`'s `JNI_OnLoad` gets a relative path, and the VM aborts with
-`Could not allocate library name` while `java.awt.Toolkit` initialises. `jniLibs/` holds only the
-CMake-built libraries, which Gradle puts there itself. `stage-android-jre.sh` removes stray JRE libraries from it.
+`Could not allocate library name` while `java.awt.Toolkit` initialises. Keep `jniLibs/` empty:
+Gradle packages the CMake-built libraries from its own build output, not from there. `stage-android-jre.sh` removes stray JRE libraries from it.
 
 Two settings exist only for this VM:
 
@@ -128,7 +128,8 @@ also runs when a staged jar is newer than `runtime.tag`.
 
 So a clean tree stages itself, and an already-staged tree skips all of it. **After a change to shared Java, or an
 upstream merge that keeps the same version number, Gradle will happily build an APK with the old jars.** Re-run
-steps 2–6 by hand (or delete the staged jars and `runtime.tag`) whenever the Java side changed.
+steps 2–6 by hand whenever the Java side changed (deleting only the staged jars rebuilds them from the stale
+shaded jar).
 
 ### `runtime.tag` and the on-device copy
 

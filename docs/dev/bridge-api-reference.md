@@ -272,7 +272,7 @@ Native-UI bridge that gives the mobile shell a way to **right-click an infobox**
 
 Source: [`runelite-client/src/main/java/net/runelite/client/headless/JavaBridge.java`](../../runelite-client/src/main/java/net/runelite/client/headless/JavaBridge.java)
 
-Phase-4 (W3) sub-goal B: the native&lt;->Java facade for a *real interactive* client on iOS.
+Phase-4 (W3) sub-goal B: the native&lt;->Java facade for a *real interactive* client on both ports.
 
 **Methods**
 
@@ -295,7 +295,7 @@ Phase-4 (W3) sub-goal B: the native&lt;->Java facade for a *real interactive* cl
   Draw the selection feedback INTO the game frame (client thread, from `Hooks.draw` after the overlays composite, before the blit snapshot): a tight model outline on the just-selected entity for a beat. Tighter than a native polygon of the convex hull and it tracks the moving entity, since it's the engine's own model silhouette. (The walk destination tile is left to RuneLite's Tile Indicators plugin.)
 - `getFrameHeight()` → `int`
 - `getFramePixels()` → `int[]`  
-  The latest *complete* composited frame as packed `0xAARRGGBB` ints (a stable snapshot, not the live back buffer). Returns `null` before the first frame.
+  The latest *complete* composited frame as packed `0x00RRGGBB` ints (a stable snapshot, not the live back buffer; the top byte is not alpha, and both native readers draw the frame opaque). Returns `null` before the first frame.
 - `getFrameSeq()` → `int`  
   Monotonically increasing counter bumped once per published frame. The native side caches the last value it rendered and skips the `CGImage` rebuild when it is unchanged (the display refreshes faster than the engine composites), so an idle login screen costs almost nothing per tick.
 - `getFrameWidth()` → `int`  

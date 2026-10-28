@@ -120,8 +120,9 @@ as reviewed in `tools/shared-contract/hub-pin.ack`. The ledger's header explains
 
 ## 4. Bridge censuses
 
-The contract check compares signatures with a baseline. The censuses go further: they load the jars each
-port actually ships and resolve every lookup in a JVM.
+The contract check compares signatures with a baseline. The censuses go further: they resolve every lookup
+against compiled jars in a running JVM. The Android census loads the shaded client jar that the Android jars are
+built from; the iOS census runs the iOS app's own jars, inside the app's own VM, in the Simulator.
 
 **Android, on the desktop:**
 
@@ -460,7 +461,7 @@ Run this after any change that reaches the device, on each port the change touch
 - [ ] **Boot.** The app launches (on iOS: LocalDevVPN connected, StikDebug attached, `[rl-jit]` lines in
       StikDebug's log) and the login screen draws.
 - [ ] **Login.** The throwaway account logs in and reaches the world.
-- [ ] **World.** Tap to walk; long-press opens the menu and an option fires; a two-finger drag turns the camera;
+- [ ] **World.** Tap to walk; long-press opens the menu and an option fires; a one-finger drag turns the camera;
       pinch zooms. The inventory, equipment and prayer tabs open and their items respond.
 - [ ] **Renderer switch.** Switch to each renderer you touched (CPU, GPU, 117 HD), relaunch, and check it draws.
 - [ ] **Plugin panel.** Settings and the plugin list open; a plugin's side panel opens; a setting you change

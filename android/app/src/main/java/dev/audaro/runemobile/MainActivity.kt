@@ -2086,8 +2086,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** AP-0 logout: flush pending config (the restart kills the process), delete tokens.json, purge the
-     *  WebView cookie store (so the IdP can't silently re-auth the old account), then restart into the
-     *  login-first boot gate. Cookie removal is async — chain the restart off its callback. */
+     *  app's WebView cookie store, then restart into the login-first boot gate. (The login itself runs in a
+     *  Chrome Custom Tab, whose cookies this can't reach; the consent URL's prompt=login is what stops Jagex
+     *  silently re-authorising the old account.) Cookie removal is async — chain the restart off its callback. */
     private fun doLogout() {
         val purgeAndRestart = {
             val clean = JagexTokens.deleteAll(applicationContext)

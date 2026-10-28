@@ -1,6 +1,6 @@
 # gpu-tbo2d — RLHD `textureFaces` (GL_RGB32I texture-buffer) → 2D integer-texture repack (117HD blocker #1)
 
-> Branch `gpu`. Self-contained iOS Simulator GLES harness (mirrors `gpu-depthsim`/`gpu-b1`/`gpu-clipremap`:
+> Self-contained iOS Simulator GLES harness (mirrors `gpu-depthsim`/`gpu-b1`/`gpu-clipremap`:
 > EAGL ES3 offscreen FBO + `glReadPixels` + md5-gated verdict). Retires the single largest unproven piece of the
 > 117HD-on-iOS port — the texture-buffer repack — validated against **RLHD's real format and fetch idiom**.
 >
@@ -17,8 +17,8 @@
 | Fetch idiom | `texelFetch(textureFaces, vTextureFaceIdx{,+1,+2}).xyz` (flat/provoking path) **and** `texelFetch(textureFaces, vTextureFaceIdx{,+1})[vertex]` (per-vertex, `vertex = gl_VertexID % 3`) — `scene_vert.glsl:77-90`, `shadow_vert.glsl:54-57` |
 
 `isamplerBuffer` / `GL_TEXTURE_BUFFER` is **ES 3.2 core** — present on Android's Mali-G715, **absent on iOS EAGL
-GLES 3.0 *and* ANGLE-on-Metal ES 3.0**. So the port must repack the buffer into a 2D texture. Blocker **#1** in
-`ios/HD-PORT-BLUEPRINT.md` §5, **backend-independent**, **upstream of every Zone shader**, and **0%-de-risked by
+GLES 3.0 *and* ANGLE-on-Metal ES 3.0**. So the port must repack the buffer into a 2D texture. This is blocker
+**#1** of the 117 HD iOS port: **backend-independent**, **upstream of every Zone shader**, and **0%-de-risked by
 Android** (it had native TBO).
 
 ## Result (md5-sealed: `evidence/gpu-tbo2d-sim-verdict.log`)
@@ -62,7 +62,7 @@ RULE 3  texelFetch(textureFaces, EXPR)
         (the .xyz / [vertex] swizzle after the call is UNCHANGED)
 ```
 
-As a `sed`-style pass for `stage-rlhd-zone-jar.sh` (iOS variant), applied per shader file:
+As a `sed`-style pass, applied per shader file:
 
 ```sh
 # rule 1
@@ -94,9 +94,11 @@ Bind it to the same texture unit RLHD uses (`TEXTURE_UNIT_TEXTURED_FACES`) as a 
 the buffer-texture bind. This lives behind the Route C facade (the `org.lwjgl.opengl` shim) so RLHD source is
 unmodified except the shader downport above.
 
-## Next
+## Where it landed
 
-- Wire RULES 1-3 into the iOS `stage-rlhd-zone-jar` shader pass and the facade upload above, when iOS Zone **B0**
-  (renderer bring-up) starts. This probe is the correctness oracle for that wiring.
-- The other ES-3.0 blockers (§5: draw-indirect strip, `glFramebufferTextureLayer`, RGBA16UI-array probe,
-  clamp-to-border, `#version 420/430`→`300 es`) are separate, smaller items.
+- RULES 1-3 run in the app's shader downport (`gpu-routec/app/RouteCBridge.m`, step 5b) and in the Z0
+  assembler (`gpu-zone/assemble/ZoneShaderAssemble.java`). The upload is `glTexBuffer` in
+  `gpu-zone/jni/routec_zone_jni.m`, which repacks the buffer into the bound 2D texture; the same file remaps
+  `glBindTexture(GL_TEXTURE_BUFFER, …)` to `GL_TEXTURE_2D`. This probe stays the correctness oracle for both.
+- The other ES-3.0 blockers (draw-indirect strip, `glFramebufferTextureLayer`, RGBA16UI-array probe,
+  clamp-to-border, `#version 420/430`→`300 es`) were separate, smaller items.

@@ -1,7 +1,7 @@
 # gpu-zone — iOS Zone Z0 conformance harness (RLHD zone shaders → ES 3.00 on EAGL)
 
-> Branch `gpu`. Phase **Z0** of `ios/archive/HD-ZONE-B0-SCOPE.md` / `ios/HD-PORT-BLUEPRINT.md` §5: a fail-closed gate that
-> proves the **entire RLHD zone-path shader surface compiles on native EAGL GLES 3.0** before any renderer work.
+> Phase **Z0** of the 117 HD (RLHD) port to iOS: a fail-closed gate that proves the **entire RLHD zone-path shader
+> surface compiles on native EAGL GLES 3.0** before any renderer work.
 > Clones the proven `gpu-b1` pattern (xcodegen + EAGL offscreen compile + md5-sealed verdict). Backend = **EAGL**
 > (the 2026-06-09 device A/B locked EAGL + `gl_FragDepth`; ANGLE is not used).
 
@@ -20,8 +20,7 @@
   unresolved) + `java/…/shader/{ShaderIncludes,ShaderTemplate,ShaderException}.java` (the assembler) + `LICENSE` +
   `PROVENANCE.md`.
 - `app/` — the probe app: `ZoneDownport.{h,m}` (GLSL→ES 3.00 rewriter), `ZoneProbe.{h,m}` (compile loop), `main.m`.
-- `assembled/` — RLHD-Template-assembled shaders, bundled flat as `<name>.<stage>.assembled.glsl`. **Empty until the
-  assemble step exists** (see Status).
+- `assembled/` — RLHD-Template-assembled shaders, bundled flat as `<name>.<stage>.assembled.glsl` (see Status).
 - `project.yml` — xcodegen (`xcodegen generate` → `GpuZone.xcodeproj`).
 - `gpu-zone-z0-verdict.sh` — md5-gated verdict over the pulled `gpu-zone-z0-verdict.log`.
 
@@ -36,14 +35,14 @@ RLHD .glsl (#include/#define)  ──assemble──►  flat desktop GLSL (#vers
 
 ## ZoneDownport — what's implemented (`app/ZoneDownport.m`)
 
-Superset of the base-gpu B1 downporter. Per the blueprint §5 blocker list:
+Superset of the base-gpu B1 downporter. The `#N` tags are the port's numbered ES 3.0 blockers:
 1. `#version <any>` (RLHD injects **420/430**, not 330) → `#version 300 es`  *(#7)*
 2. inject `precision …` qualifiers (float/int/sampler2DArray/sampler2D/**isampler2D/usampler2D**)
 3. drop `noperspective`
 4. strip float-literal `f`/`F` suffixes
 5. **`textureFaces` texture-buffer → 2D `isampler2D` repack** (3 rules, proven byte-exact in `gpu-tbo2d`)  *(#1)*
 6. explicit int↔float casts — **site set discovered from Z0 compile errors** (empty until the compile loop runs;
-   prefer hand-maintained variants for the cast-heavy files per the blueprint).
+   prefer hand-maintained variants for the cast-heavy files).
 
 ## Status — done / in progress / remaining
 
@@ -86,7 +85,7 @@ MAT_*-constants, the shadows-off `sampleShadowMap` int-`0` stub macro, the full 
 `utils/color_utils.glsl`, `utils/water.glsl`, `utils/fog.glsl`; everything else via targeted CAST rules. Also fixed a
 real downport bug (the `f`-suffix strip corrupting `material1.flowMap`→`lowMap`).
 
-## Phase B0 — renderer bring-up (`ios/archive/HD-ZONE-B0-SCOPE.md`)
+## Phase B0 — renderer bring-up
 
 **B0.1 GREEN (host, no device).** `stage-ios-zone-jar.sh` stages the iOS-variant RLHD jar: it compiles the
 RLHD source — pristine (`rlhd-src/src/`, full tree @ `f5be256` = v1.6.0.1, gitignored — see `rlhd-src/PROVENANCE.md`)

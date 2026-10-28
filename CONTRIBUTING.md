@@ -34,8 +34,16 @@ Before committing a change that touches `headless/`:
 tools/shared-contract/check-contract.sh
 #   exit 0 = no surface change
 #   exit 1 = additive change  -> update the baseline in the same commit
-#   exit 2 = breaking change   -> not allowed
+#   exit 2 = breaking change  -> verify the other port, then update the baseline in the same commit
 ```
+
+Update the baseline with `check-contract.sh --update` and stage `tools/shared-contract/baseline.txt`; the
+`pre-commit` hook blocks any contract change, additive or breaking, until it is staged. A breaking change (a
+public static, `-D` flag or payload key removed or changed) is allowed, but only once both bridge censuses pass
+against it: `android/dev-tools/bridge-census/run-census-desktop.sh` (expect `ANDROID_BRIDGE_CENSUS_GREEN`) and
+`ios/dev-tools/bridge-census/run-census-sim.sh --jars` (expect `IOS_BRIDGE_CENSUS_GREEN`). The release gate
+(`android/dev-tools/ci/release-gate.sh`) accepts an additive diff but fails a breaking one against the committed
+baseline, so a breaking change ships only with its refreshed baseline committed.
 
 `check-contract.sh --update` also regenerates [`docs/dev/bridge-api-reference.md`](docs/dev/bridge-api-reference.md),
 the member-by-member reference built from the same scan plus each member's Javadoc; stage it with the baseline. A
@@ -164,7 +172,8 @@ they check and what they don't.
 
 - **Android:** Kotlin + Jetpack Compose shell. Keep Android work under `android/`.
 - **iOS:** Objective-C + UIKit shell under `ios/`.
-- **Native:** C++17. The native UI thread is never attached to the embedded JVM.
+- **Native:** C++17. Android's UI thread is never attached to the embedded JVM (touches are queued for the
+  render thread); iOS's UI thread is attached and calls the bridge directly. See `headless/package-info.java`.
 - R8 / minification is intentionally **off** — don't enable it.
 - Don't fork the upstream RuneLite tree (`runelite-client/`, `runelite-api/`, …)
   unnecessarily; prefer additive bridge code.

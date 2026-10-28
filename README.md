@@ -219,7 +219,7 @@ A few things this build does deliberately that you might otherwise mistake for b
   at a slow tick to save battery, and Android/Jagex may cut the connection;
   foregrounding triggers the automatic re-login above. (iOS keeps the session alive
   in the background.)
-- **117HD may reduce resolution when the phone runs hot (iOS).** Under sustained
+- **117HD may reduce resolution when the phone runs hot (both ports).** Under sustained
   thermal pressure the HD renderer temporarily lowers its internal resolution scale
   and restores it once the device cools. This is intentional.
 - **The native HUD needs Resizable - Modern.** An account saved in Resizable - Classic
@@ -304,7 +304,7 @@ JIT step each time you play.** No jailbreak is required.
 1. Turn on the **LocalDevVPN** toggle.
 2. Open **StikDebug**, pick **RuneMobile** (with `runelite-jit.js` assigned), and let
    it **attach** (its log shows `[rl-jit]` lines as JIT switches on).
-3. Open **RuneMobile** and tap **Start JVM** — it boots into the game.
+3. Open **RuneMobile** and tap the **Tap to Play** button — it boots into the game.
 
 > Opening RuneMobile *without* attaching StikDebug first will simply wait — that is
 > expected. Attach, and it continues.
@@ -362,7 +362,8 @@ installed.
 
 - StikDebug's log prints `[rl-jit] attached …`, then one or more
   `[rl-jit] #<n> brk#0x69 size=… -> RX 0x…` lines (one per code-cache reservation).
-- RuneMobile reaches the game after you tap **Start JVM**.
+- RuneMobile's **Tap to Play** button turns active ("Ready to play"), and the game loads
+  after you tap it.
 
 If you see **no `[rl-jit]` lines**, the script was not assigned — redo the assignment
 step. If StikDebug **won't list or select the script at all**, or the attach aborts
@@ -427,7 +428,7 @@ When asking for help, **never paste `tokens.json`, an `access_token`, a
 
 | Symptom | Cause / fix |
 |---|---|
-| App won't launch / just waits | JIT not enabled. Turn on LocalDevVPN, attach StikDebug, then tap **Start JVM**. |
+| App won't launch / just waits | JIT not enabled. Turn on LocalDevVPN, attach StikDebug, then tap the **Tap to Play** button. |
 | Attaches but crashes, no `[rl-jit]` log lines, or StikDebug won't list/select the script | Script not assigned, or the file is corrupted/malformed — delete it from `StikDebug/scripts/` and re-import a fresh `runelite-jit.js`, then re-assign it to RuneMobile. |
 | "Unable to install" in SideStore | SideStore's VPN must be on and you must be signed into your Apple ID. |
 | Can't enable Developer Mode | Set a device passcode first, then Settings → Privacy & Security. |
@@ -496,18 +497,21 @@ with the full JIT and no StikDebug, and a single command checks a build there. S
 ```
  ART / iOS process
    └─ native shell (Kotlin+Compose / ObjC+UIKit) ── SurfaceView / CAEAGL host
-        └─ C++ bootstrap: dlopen libjvm → JNI_CreateJavaVM
+        └─ bootstrap (C++ / ObjC): dlopen libjvm → JNI_CreateJavaVM
              └─ embedded OpenJDK 21 (HotSpot, JIT)
                   └─ stock RuneLite (headless) + Caciocavallo AWT
                        └─ headless/* bridge ──► shared verbatim across both ports
 ```
 
-The native UI thread is attached to the embedded JVM (as a daemon, like every thread that
-calls into it) but **never** touches engine state: input goes in as queued intents that the
-client thread drains, and the UI reads immutable snapshots the client thread publishes. The
-rule is spelled out in `headless/package-info.java`. R8 / minification is intentionally off.
-[`PORTS.md`](PORTS.md) is the repo map: what the ports share, what each bundles, and how the
-shared edge is kept. The mobile project lives under `ios/`, `android/`, and the shared
+Every thread that calls into the embedded JVM attaches itself as a daemon, and none of them
+**ever** touches engine state: input goes in as queued intents that the client thread
+drains, and the native side reads immutable snapshots the client thread publishes. Which
+threads attach differs by port. On iOS the UI thread attaches and calls the bridge directly.
+On Android it never attaches: touches go onto a native queue that the (attached) render thread
+drains into the bridge, and requests from the plugin and settings screens run on a dedicated
+`rl-bridge` thread. The rule is spelled out in `headless/package-info.java`. R8 / minification
+is intentionally off. [`PORTS.md`](PORTS.md) is the repo map: what the ports share, what each
+bundles, and how the shared edge is kept. The mobile project lives under `ios/`, `android/`, and the shared
 `runelite-client/.../headless/` bridge package; the rest of the tree
 (`runelite-client/`, `runelite-api/`, …) is upstream RuneLite, updated by merging
 `runelite/runelite` and carried with a deliberately small set of additive fork seams

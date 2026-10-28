@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# macbook-transition.sh — one-shot setup on the MacBook to continue the iOS GPU device-kit work.
-# Pulls the latest code (origin/gpu) + the local-only state bundle (tokens / JRE / cacio jars / project memory)
+# macbook-transition.sh — one-shot setup on the MacBook to continue iOS work there.
+# Pulls the latest code (origin/master) + the local-only state bundle (tokens / JRE / cacio jars / project memory)
 # from the Mac mini over Tailscale, rebuilds the gitignored jars, regenerates the Xcode project (EAGL backend),
 # compiles + (if a phone is attached) installs the app. Idempotent — safe to re-run.
 #
@@ -17,7 +17,7 @@ MINI_USER="${MINI_USER:-youruser}"
 BUNDLE_NAME="${BUNDLE_NAME:-runelite-ios-local-state.tar.gz}"
 ORIGIN="${ORIGIN:-git@github.com:YOUR_USER/YOUR_REPO.git}"
 REPO="${REPO:-$HOME/runelite-ios}"
-BRANCH="${BRANCH:-gpu}"
+BRANCH="${BRANCH:-master}"
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 CONFIG="${CONFIG:-Debug}"                     # Debug (default dev bootstrap) | Release (hardened, QA-P1-12/13)
 case "$CONFIG" in Debug|Release) ;; *) echo "CONFIG must be Debug or Release (got '$CONFIG')" >&2; exit 1 ;; esac
@@ -119,13 +119,7 @@ printf '\n\033[1;32m================  READY  ================\033[0m\n'
 cat <<EOF
 On origin/$BRANCH ($(git -C "$REPO" rev-parse --short HEAD)), EAGL build, app built$([ -n "${DEV:-}" ] && echo " + installed").
 
-Next — the gl_FragDepth early-Z A/B (full steps: ios/dev-tools/gpu-routec/DEVICE-KIT.md):
-  1) push mode=baseline, attach StikDebug, Run GPU, walk to the Grand Exchange, stand still ~60s
-  2) push mode=fragdepth, Run GPU, same spot, ~60s
-  3) pull Documents/routec-perf.log and compare 'gpuFinish avg/p95' between the two lines
-  (push a mode:  printf MODE > /tmp/mode.txt; xcrun devicectl device copy to --device <uuid> \\
-     --domain-type appDataContainer --domain-identifier dev.audaro.runemobile \\
-     --source /tmp/mode.txt --destination Documents/routec-water-mode.txt )
+Next: docs/dev/ios.md covers building, deploying and debugging.
 
 If OSRS login fails, the Jagex tokens are stale — re-mint: ios/dev-tools/fetch-shield-tokens.sh
 EOF

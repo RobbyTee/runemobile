@@ -5,6 +5,7 @@
 # Contents:
 #   - Phase-1 probes (jvmbench): JitProbe, Bench, GlyphSmoke
 #   - W1 P3 §6.0 activation confirm (awtsmoke): AwtActivation + UnsafePokeActivation
+#   - the §6.2 device boot (awtsmoke): DeviceHeadlessBoot + GateCensus (skipped with ALLOW_NO_SHADED=1)
 #   - the CACIO cacio17 classes (cacio-tta + cacio-shared 1.18) FOLDED IN, so the device
 #     classpath stays just probes.jar (JVMLauncher sets -Djava.class.path to it alone).
 #     Cacio is GPLv2 WITH THE CLASSPATH EXCEPTION and these classes DO ship inside app binaries —

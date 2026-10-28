@@ -1,22 +1,33 @@
 #!/usr/bin/env bash
-# Android release gate — the single, runnable "a real gate exists and passes" check (GATE.md row 6).
+# Android release gate — the single, runnable "a real gate exists and passes" check.
 #
 # This script IS the gate — fully reproducible on a developer machine. The hosted release pipeline
 # (.github/workflows/release-hosted.yml, see tools/ci/README.md) runs only its --contract-only pre-flight, then
-# builds, release-signs and verifies the signing cert itself (tools/ci/build-release-artifacts.sh). The lint,
-# the script lint and the opt-in device smoke run only here, so run the full gate before a release push; this
-# script, not CI, is the source of truth. (This fork ships an unapproved live-OSRS client and is never published
-# to a store.) Findings covered:
+# builds, release-signs and verifies the signing cert itself (tools/ci/build-release-artifacts.sh). The linters,
+# the bridge unit tests, lintRelease and the opt-in device smoke run only here, so run the full gate before a
+# release push; this script, not CI, is the source of truth. (This fork ships an unapproved live-OSRS client and
+# is never published to a store.) Findings covered:
 #   PROD-QA-01          — build a signed :app:assembleRelease, lint it, run the shared-contract check (+ a
 #                         device-smoke stage that is opt-in: it needs a real device / Firebase Test Lab pool).
 #   PROD-RELEASE-ENG-07 — the cross-port contract check is no longer a bypassable local-only pre-commit hook;
 #                         it is a required, non-bypassable stage of this gate (fail on a removed/changed entry).
 #
+# Stages, in order:
+#   1   cross-port contract (check-contract.sh) + bridge API reference freshness (gen-bridge-api.py --check)
+#   1a  Jagex OAuth wire contract (check-auth-contract.sh)
+#   1b  RuneLite api/hub version-pin review (check-hub-pin.sh)    — --contract-only stops after this
+#   1c  shellcheck   1d  ktlint   1e  detekt                       — each fails if the tool is missing
+#   1f  headless bridge unit tests (:client:test --tests net.runelite.client.headless.*)
+#   2   :app:assembleRelease (+ verifyNoReleaseSecret / verifyReleaseBootAssets)
+#   2b  signing verification (apksigner certificate fingerprint)  — 2 and 2b are skipped by --skip-build
+#   3   :app:lintRelease
+#   4   device smoke (Firebase Test Lab), only with --with-device-smoke
+#
 # Usage:
-#   release-gate.sh                     # contract + shellcheck + assembleRelease + lintRelease (the runnable gate)
-#   release-gate.sh --contract-only     # fast pre-flight: just the cross-port contract diff
-#   release-gate.sh --with-device-smoke # also run the Firebase Test Lab boot-to-first-frame smoke (needs gcloud+pool)
-#   release-gate.sh --skip-build        # contract + shellcheck + lint + bridge unit tests (skip the heavy assembleRelease)
+#   release-gate.sh                     # stages 1-3 (the runnable gate)
+#   release-gate.sh --contract-only     # fast pre-flight: stages 1-1b only (what the hosted pipeline runs)
+#   release-gate.sh --with-device-smoke # also run stage 4, the boot-to-first-frame smoke (needs gcloud+pool)
+#   release-gate.sh --skip-build        # every stage except 2/2b (the heavy assembleRelease + signing)
 #
 # Exit: 0 = gate PASS, non-zero = a stage failed (the failing stage is named).
 set -euo pipefail
@@ -36,7 +47,7 @@ for arg in "$@"; do
 		--contract-only)     contract_only=1 ;;
 		--skip-build)        run_build=0 ;;
 		--with-device-smoke) run_device_smoke=1 ;;
-		-h|--help)           sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help)           sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "release-gate: unknown arg '$arg' (see --help)" >&2; exit 64 ;;
 	esac
 done
@@ -92,7 +103,7 @@ if [ "$contract_only" -eq 1 ]; then
 	echo; echo "✅ contract-only pre-flight PASS."; exit 0
 fi
 
-# ── Stage 1b: shellcheck (shell-script lint) ──────────────────────────────────────────────────────────
+# ── Stage 1c: shellcheck (shell-script lint) ──────────────────────────────────────────────────────────
 # Lint every tracked shell script at warning severity (config + the single SC2155 mute in .shellcheckrc).
 # Cheap and build-independent, so it runs on every invocation (including --skip-build) except the
 # contract-only pre-flight above. --require: the gate is authoritative, so a MISSING shellcheck fails here
@@ -100,13 +111,13 @@ fi
 stage "shellcheck (tracked shell scripts, --severity=warning)"
 "$ROOT/tools/lint/shellcheck.sh" --require || fail "shellcheck (lint findings or shellcheck not installed — see above)"
 
-# ── Stage 1c: ktlint (Kotlin style) ───────────────────────────────────────────────────────────────────
+# ── Stage 1d: ktlint (Kotlin style) ───────────────────────────────────────────────────────────────────
 # Lint all tracked Kotlin (config in .editorconfig). --require, like shellcheck, so a missing ktlint fails
 # the authoritative gate instead of passing silently.
 stage "ktlint (tracked Kotlin)"
 "$ROOT/tools/lint/ktlint.sh" --require || fail "ktlint (Kotlin lint findings or ktlint not installed — see above)"
 
-# ── Stage 1d: detekt (Kotlin static analysis) ─────────────────────────────────────────────────────────
+# ── Stage 1e: detekt (Kotlin static analysis) ─────────────────────────────────────────────────────────
 # Baseline-gated: existing complexity/exception debt is grandfathered, so this fails only on NEW findings.
 stage "detekt (Kotlin static analysis, baseline-gated)"
 "$ROOT/tools/lint/detekt.sh" --require || fail "detekt (new Kotlin findings or detekt not installed — see above)"
@@ -128,14 +139,14 @@ if [ -z "${JAVA_HOME:-}" ]; then
 fi
 GRADLEW=(./gradlew --no-daemon --console=plain)
 
-# ── Stage 1e: headless bridge unit tests ──────────────────────────────────────────────────────────────
+# ── Stage 1f: headless bridge unit tests ──────────────────────────────────────────────────────────────
 # Behavioural tests of the shared iOS/Android bridge surface (MenuPeek snapshot JSON + entry fingerprint,
 # JavaBridge frame double-buffering + the GPU load-in warmup hold) — coverage the contract signature-diff
 # (Stage 1) structurally cannot give: it sees method shapes, not the bytes they emit. Scoped to the
 # net.runelite.client.headless package so an unrelated upstream plugin-test breakage never blocks our gate.
 # A CORRECTNESS gate, so — like the linters above — it runs on every full invocation and is deliberately NOT
 # tied to --skip-build (only --contract-only, which exits before here, skips it). --skip-build still drops
-# the heavy assembleRelease/lintRelease/signing; this just costs a :client compile, far cheaper than those.
+# the heavy assembleRelease/signing; this just costs a :client compile, far cheaper than those.
 stage "headless bridge unit tests (:client:test --tests net.runelite.client.headless.*)"
 ( cd "$ROOT" && "${GRADLEW[@]}" :client:test --tests 'net.runelite.client.headless.*' ) \
 	|| fail "headless bridge unit tests"
@@ -192,8 +203,8 @@ fi
 
 # ── Stage 4: device smoke (PROD-QA-01, opt-in) ────────────────────────────────────────────────────────
 # Boot-to-first-frame on a real GPU. There is no device in plain CI, so this is opt-in and runs the existing
-# Firebase Test Lab harness (needs gcloud auth + a configured project). On the operator's machine it is the
-# Pixel-7a in-world boot recorded in GATE.md row 2; in a device-pool CI it would be Firebase Robo + :recon.
+# Firebase Test Lab harness (needs gcloud auth + a configured project). Without a pool, the equivalent is a
+# manual in-world boot of the release APK on a real phone; in a device-pool CI it would be Firebase Robo + :recon.
 if [ "$run_device_smoke" -eq 1 ]; then
 	stage "device smoke (Firebase Test Lab — boot to first frame)"
 	fb="$ANDROID/dev-tools/firebase/fb-gate.sh"

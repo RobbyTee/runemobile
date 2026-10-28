@@ -9,7 +9,9 @@ golden compare) and an evidence-catalog indexer.
 
 Transport: newline-delimited JSON-RPC 2.0 over stdin/stdout.
 Pinned interpreter: /usr/bin/python3 (system Python — ships PIL + numpy, which
-the image_diff tool needs). All other tools are pure stdlib + subprocess.
+image_diff and ios_sim_screenshot import, and which the sim-screens.py that
+ios_sim_screens runs under this interpreter needs). All other tools are pure
+stdlib + subprocess.
 
 Tools
 -----

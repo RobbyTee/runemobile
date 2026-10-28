@@ -35,8 +35,8 @@ calls), `RuneLite.java` (an optional override-module seam). Everything else is n
 ```
 Both boot to the **live-OSRS login screen** with `--safe-mode` (GPU off), run `RUN_SECONDS` (default 45),
 dump frames + a log to `out/` (gitignored), then print a summary. CACIO activation reuses the Gate 1b path
-(`CacioExtension` via the JUnit console launcher; `../cacio-smoke/lib` jars). Requires OpenJDK 21 at
-`/opt/homebrew/opt/openjdk@21` (override with `JAVA_HOME`).
+(`CacioExtension` via the JUnit console launcher; `../cacio-smoke/lib` jars). Requires a JDK 21: the scripts
+use `$JAVA_HOME`, and fall back to Homebrew's `openjdk@21` when it is unset.
 
 ## Result (2026-05-29) — GREEN (login-screen capture); Claim D refuted
 - **Native toolkit:** `HeadlessClientUI` realizes its frame (`canvas 765×503 displayable=true`); engine

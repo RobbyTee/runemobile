@@ -320,7 +320,7 @@ The threads involved:
 config writes and game reads go to the client thread. A shell calls the bridge method from its own thread
 and the bridge hops to the right lane.
 
-> The README's architecture note says the native UI thread is attached to the VM. That is true on iOS. On
+> Which threads attach differs by port. On iOS the UI thread attaches and calls the bridge directly. On
 > Android the UI thread is never attached; the render thread and the `rl-bridge` executor make every call.
 
 ## The shared runtime
