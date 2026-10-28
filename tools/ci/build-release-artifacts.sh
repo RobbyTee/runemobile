@@ -127,7 +127,7 @@ if wants ios; then
 	# 0) The embedded JRE (ios/dev-tools/jre) is verified + patched local state (patch-jre-txm.sh) — NOT
 	#    reproducible from a URL, so a fresh workspace seeds it from the CI config dir.
 	#    One-time seed:  cp -R <dev-checkout>/ios/dev-tools/jre ~/.runemobile-ci/ios-jre
-	if [ ! -f ios/dev-tools/jre/lib/libjvm.dylib ]; then
+	if [ ! -f ios/dev-tools/jre/lib/server/libjvm.dylib ]; then
 		[ -d "$CI_CONFIG_DIR/ios-jre" ] || die "ios/dev-tools/jre missing and no seed at $CI_CONFIG_DIR/ios-jre (see tools/ci/README.md)"
 		log "Seed ios/dev-tools/jre from $CI_CONFIG_DIR/ios-jre"
 		rm -rf ios/dev-tools/jre
