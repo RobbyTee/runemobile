@@ -16,7 +16,8 @@ import android.view.View
  * A6 native Jagex-Mobile chrome: the official app's tab group and the column beside the chat, drawn over the live
  * SurfaceView with the OSRS sprites from the live cache, at the official layout's sizes (interface 601).
  *
- * The tab group (SIDE_RIGHT_TABS) is a framed 2-column x 7-row grid at the right, flush with the safe edge. Its 7th
+ * The tab group (SIDE_RIGHT_TABS) is a framed 2-column x 7-row grid at the right, flush with the safe edge (in
+ * portrait, which has no side inset, it keeps PORTRAIT_RIGHT_EDGE_DP off the screen's edge and rounded corner). Its 7th
  * inner stone collapses it to the inner column, the outer one sliding under it. The engine's own 14 tab stones are
  * HIDDEN (HudVeneerBridge.setStonesHidden) so these native cells ARE the tabs; a tap opens the tab by replaying the
  * engine stone's op script (HudVeneerBridge.openTab). No widget is moved or covered; the engine and every plugin
@@ -284,7 +285,8 @@ class ChromeOverlayView(
     private fun safeInsets(): IntArray = safeInsetsIn(this).let { intArrayOf(it[1], it[2], it[3]) }
 
     /** Recompute + cache the group's geometry from the current view size + insets (matches iOS updateChrome and
-     *  tabGridTopForHeight): 85x280 canvas px (58 wide collapsed), flush with the safe right edge. Vertically it takes
+     *  tabGridTopForHeight): 85x280 canvas px (58 wide collapsed), flush with the safe right edge (portrait: at least
+     *  PORTRAIT_RIGHT_EDGE_DP off the screen's). Vertically it takes
      *  the official app's anchor (interface 601, script 919): once the safe area is at least 503 game px tall the
      *  group (and the panel, which the host centres on it) is centred 87 game px below its middle, and below that it
      *  sits 4 px off its bottom; never past the bottom margin. In portrait the official app has no layout, so the group
@@ -298,7 +300,8 @@ class ChromeOverlayView(
         val w = (if (collapsed) GROUP_W_COLLAPSED else GROUP_W) / kx
         val h = GROUP_H / ky
         val margin = 4f / ky
-        val gx0 = width - ins[1] - w
+        val right = if (height > width) maxOf(ins[1].toFloat(), dp(PORTRAIT_RIGHT_EDGE_DP)) else ins[1].toFloat()
+        val gx0 = width - right - w
         val safeTop = ins[0].toFloat()
         val safeBottom = (height - ins[2]).toFloat()
         val lowest = safeBottom - margin - h
@@ -490,6 +493,7 @@ class ChromeOverlayView(
         const val GROUP_W = 85
         const val GROUP_W_COLLAPSED = 58
         const val GROUP_H = 280
+        const val PORTRAIT_RIGHT_EDGE_DP = 10f // the group's gap to the screen edge in portrait (iOS kPortraitRightEdge)
 
         // The column (SIDE_LEFT_CHAT): 58-px stones, 4 px below the chat's top, at the grid's pitch.
         const val COLUMN_W = 58
