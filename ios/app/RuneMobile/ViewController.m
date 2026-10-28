@@ -799,6 +799,9 @@ static const int kTabFrameInset = 3;
 static const int kTabGroupW = 85;
 static const int kTabGroupCollapsedW = 58;
 static const int kTabGroupH = 280;
+// Portrait has no side safe area, so the group and the plugin rail keep this far (pt) off the right edge, clear of the
+// screen's rounded corner.
+static const CGFloat kPortraitRightEdge = 10.0;
 // The tabs in grid-slot order, row-major (slot 0 = top-left, 1 = top-right, …), mapped to engine tab indexes, in the
 // official app's order (interface 601): the inner column, next to the panel, is inventory, equipment, prayer, magic,
 // combat, quests and the expand stone; the outer one is skills, emotes, music, clan, friends, account and settings.
@@ -5856,6 +5859,8 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     CGFloat k = (CGFloat)self.renderW / W;
     // TAB-1: step left of the plugin rail (updateHudLayout moves the minimap when the rail comes or goes).
     CGFloat right = [self hudRightInset];
+    if (H > W)
+        right = MAX(right, kPortraitRightEdge);
     // Collapsed (the expand stone), the group narrows to the inner column, and the outer one slides under it.
     BOOL collapsed = self.tabGridCollapsed;
     int groupWc = collapsed ? kTabGroupCollapsedW : kTabGroupW;
@@ -5869,6 +5874,7 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     // In portrait the plugin rail shares the right edge with the minimap and the group, so it keeps to the gap
     // between them (hudRightInset).
     CGRect mmRect = [self overlayEditMinimapCanvasRect];
+    [self.panelDock setRailEdgeInset:H > W ? kPortraitRightEdge : 0];
     if (H > W && !CGRectIsNull(mmRect))
         [self.panelDock setRailBandTop:CGRectGetMaxY(mmRect) / k + 6.0 bottom:gy0 - 6.0];
     else

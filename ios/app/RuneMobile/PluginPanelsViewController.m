@@ -57,6 +57,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 @property (nonatomic, strong) NSLayoutConstraint *railHeight; // sized to content, clamped to the clear band
 @property (nonatomic, strong) NSLayoutConstraint *railBandTop; // setRailBandTop:bottom: (inactive until set)
 @property (nonatomic, strong) NSLayoutConstraint *railBandBottom;
+@property (nonatomic, strong) NSLayoutConstraint *railTrailing; // the rail's gap to the screen edge (setRailEdgeInset:)
 @property (nonatomic, strong) UIView *panelContainer;      // docked: collapsible inline panel column
 @property (nonatomic, strong) NSLayoutConstraint *panelTrailRail;  // panel trailing -> rail leading (rail shown)
 @property (nonatomic, strong) NSLayoutConstraint *panelTrailEdge;  // panel trailing -> screen edge (rail hidden)
@@ -184,36 +185,49 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     railCenter.priority = UILayoutPriorityDefaultHigh;             // centre in the clear band when it fits
 
     UILayoutGuide *sg = self.view.safeAreaLayoutGuide;
+    self.railTrailing = [self.rail.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-kRailEdgeInset];
     [NSLayoutConstraint activateConstraints:@[
         // Right rail: floats in the outer strip just off the screen edge, to the RIGHT of the native tab stones.
         // Top/bottom are clamped OUT of the rounded-corner radius (kRailCornerClear, measured from the PHYSICAL
         // edges) so the curve never clips the bar; vertically centred; scrolls if the plugin count overflows.
-        [self.rail.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-5],
-        [self.rail.topAnchor constraintGreaterThanOrEqualToAnchor:self.view.topAnchor constant:kRailCornerClear],
-        [self.rail.bottomAnchor constraintLessThanOrEqualToAnchor:self.view.bottomAnchor constant:-kRailCornerClear],
+        self.railTrailing,
+        [self.rail.topAnchor constraintGreaterThanOrEqualToAnchor:self.view.topAnchor
+                                                         constant:kRailCornerClear],
+        [self.rail.bottomAnchor constraintLessThanOrEqualToAnchor:self.view.bottomAnchor
+                                                         constant:-kRailCornerClear],
         [self.rail.widthAnchor constraintEqualToConstant:kRailWidth],
         railCenter,
         self.railHeight,
 
         // Inline panel column: left of the rail (over the game world, not the native tabs), full clear height.
         // (Trailing is one of two swappable constraints set up below — to the rail when shown, else the edge.)
-        [self.panelContainer.topAnchor constraintEqualToAnchor:sg.topAnchor constant:6],
-        [self.panelContainer.bottomAnchor constraintEqualToAnchor:sg.bottomAnchor constant:-6],
+        [self.panelContainer.topAnchor constraintEqualToAnchor:sg.topAnchor
+                                                      constant:6],
+        [self.panelContainer.bottomAnchor constraintEqualToAnchor:sg.bottomAnchor
+                                                         constant:-6],
         [self.panelContainer.widthAnchor constraintEqualToConstant:kDockPanelW],
 
-        [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.panelContainer.leadingAnchor constant:12],
-        [self.titleLabel.topAnchor constraintEqualToAnchor:self.panelContainer.topAnchor constant:10],
+        [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.panelContainer.leadingAnchor
+                                                      constant:12],
+        [self.titleLabel.topAnchor constraintEqualToAnchor:self.panelContainer.topAnchor
+                                                  constant:10],
         [close.centerYAnchor constraintEqualToAnchor:self.titleLabel.centerYAnchor],
-        [close.trailingAnchor constraintEqualToAnchor:self.panelContainer.trailingAnchor constant:-12],
-        [self.titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:close.leadingAnchor constant:-8],
-        [sep.topAnchor constraintEqualToAnchor:self.panelContainer.topAnchor constant:kTitleBarHeight],
+        [close.trailingAnchor constraintEqualToAnchor:self.panelContainer.trailingAnchor
+                                             constant:-12],
+        [self.titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:close.leadingAnchor
+                                                                 constant:-8],
+        [sep.topAnchor constraintEqualToAnchor:self.panelContainer.topAnchor
+                                      constant:kTitleBarHeight],
         [sep.leadingAnchor constraintEqualToAnchor:self.panelContainer.leadingAnchor],
         [sep.trailingAnchor constraintEqualToAnchor:self.panelContainer.trailingAnchor],
         [sep.heightAnchor constraintEqualToConstant:1],
         [self.panelScroll.topAnchor constraintEqualToAnchor:sep.bottomAnchor],
-        [self.panelScroll.leadingAnchor constraintEqualToAnchor:self.panelContainer.leadingAnchor constant:6],
-        [self.panelScroll.trailingAnchor constraintEqualToAnchor:self.panelContainer.trailingAnchor constant:-6],
-        [self.panelScroll.bottomAnchor constraintEqualToAnchor:self.panelContainer.bottomAnchor constant:-6],
+        [self.panelScroll.leadingAnchor constraintEqualToAnchor:self.panelContainer.leadingAnchor
+                                                       constant:6],
+        [self.panelScroll.trailingAnchor constraintEqualToAnchor:self.panelContainer.trailingAnchor
+                                                        constant:-6],
+        [self.panelScroll.bottomAnchor constraintEqualToAnchor:self.panelContainer.bottomAnchor
+                                                      constant:-6],
     ]];
 
     // Swappable panel trailing: anchored to the rail's leading edge when the rail is shown, else to the screen
@@ -235,7 +249,13 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 }
 
 - (CGFloat)railStripWidth {
-    return (self.docked && self.rail && !self.rail.hidden) ? kRailEdgeInset + kRailWidth : 0.0;
+    return (self.docked && self.rail && !self.rail.hidden) ? -self.railTrailing.constant + kRailWidth : 0.0;
+}
+
+- (void)setRailEdgeInset:(CGFloat)inset {
+    CGFloat constant = -MAX(inset, kRailEdgeInset);
+    if (self.railTrailing && self.railTrailing.constant != constant)
+        self.railTrailing.constant = constant; // called on every chrome tick
 }
 
 - (void)setRailBandTop:(CGFloat)top bottom:(CGFloat)bottom {
