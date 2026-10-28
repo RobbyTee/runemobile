@@ -52,6 +52,7 @@ class LoginActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestedOrientation = ScreenSetting.screenOrientation(this) // the game's side, so login doesn't turn the phone
         launched = savedInstanceState?.getBoolean("launched") ?: false
         // The consent URL was minted with THIS instance's nonce/state — restore them across an Activity
         // recreation (rotation/theme flip mid-browser-trip) or the returning link would fail the binding check.

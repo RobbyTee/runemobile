@@ -47,7 +47,7 @@ import org.json.JSONObject
 import java.util.Locale
 import kotlin.math.roundToInt
 
-private fun prefs(ctx: Context): SharedPreferences = ctx.getSharedPreferences("game_settings", Context.MODE_PRIVATE)
+internal fun prefs(ctx: Context): SharedPreferences = ctx.getSharedPreferences("game_settings", Context.MODE_PRIVATE)
 
 /**
  * The phone-side game settings behind the launcher's Game settings screen. They live in their own
@@ -159,6 +159,7 @@ fun GameSettingsScreen(onBack: () -> Unit) {
                 TextButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "Back" }) { Text("‹ Back") }
                 Text("Game settings", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
             }
+            GsScreenSection()
             GsTouchSection()
             GsGameSection()
             GsHapticsSection()
@@ -254,7 +255,7 @@ private fun GsHapticsSection() {
 }
 
 @Composable
-private fun GsSectionHeader(title: String) {
+internal fun GsSectionHeader(title: String) {
     Text(
         title.uppercase(),
         color = GS_ACCENT,
@@ -326,7 +327,7 @@ private fun GsSlider(
 }
 
 @Composable
-private fun GsSegments(
+internal fun GsSegments(
     labels: List<String>,
     selected: Int,
     onSelect: (Int) -> Unit,

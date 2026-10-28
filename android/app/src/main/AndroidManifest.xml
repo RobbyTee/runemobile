@@ -57,7 +57,7 @@
 
         <!-- A3 on-device Jagex login: consent flow runs in a Chrome Custom Tab (real Chrome clears Cloudflare;
              the embedded WebView is bot-blocked at the auth step), the http://localhost redirect link is brought
-             back via clipboard/paste. Not exported; landscape to match the shell. -->
+             back via clipboard/paste. Not exported; onCreate turns it to the game's side (Game settings > Screen). -->
         <activity
             android:name=".LoginActivity"
             android:exported="false"

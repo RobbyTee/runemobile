@@ -262,8 +262,13 @@ class MainActivity : AppCompatActivity() {
     // FOLD-3: the canvas size the bridge last accepted, until a frame of that size is drawn and the host adopts it.
     private var pendingCanvas: Pair<Int, Int>? = null
 
-    // FOLD-4: whether the laid-out window is a large screen (see isLargeScreen); null until the first layout.
-    private var largeWindow: Boolean? = null
+    // FOLD-4: the laid-out window's screen class for its zoom (see swapZoom); null until the first layout.
+    private var zoomScreen: String? = null
+
+    // Whether the chat's and the minimap's dragged offsets in use are portrait's (see hudKey): the setting until the
+    // window is laid out, then the window's own shape.
+    private var hudPortrait = false
+    private var portraitListener: android.content.SharedPreferences.OnSharedPreferenceChangeListener? = null
     private var perfChip: TextView? = null
     private var devPanel: LinearLayout? = null
     private var devDiag: TextView? = null
@@ -661,6 +666,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Game settings > Screen: the root's layout listener resizes the canvas to the turned window (FOLD-3).
+        hudPortrait = ScreenSetting.portrait(this)
+        requestedOrientation = ScreenSetting.screenOrientation(this)
+        portraitListener =
+            ScreenSetting.onChanged(this) { runOnUiThread { requestedOrientation = ScreenSetting.screenOrientation(this) } }
 
         vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
 
@@ -817,8 +827,8 @@ class MainActivity : AppCompatActivity() {
                     chatUserDY = 0
                     getSharedPreferences(PREFS_CHAT, MODE_PRIVATE)
                         .edit()
-                        .remove(KEY_CHAT_DX)
-                        .remove(KEY_CHAT_DY)
+                        .remove(hudKey(KEY_CHAT_DX))
+                        .remove(hudKey(KEY_CHAT_DY))
                         .apply()
                     lastChatX = Int.MIN_VALUE
                     lastChatY = Int.MIN_VALUE
@@ -840,8 +850,8 @@ class MainActivity : AppCompatActivity() {
                 onChatCommit = {
                     getSharedPreferences(PREFS_CHAT, MODE_PRIVATE)
                         .edit()
-                        .putInt(KEY_CHAT_DX, chatUserDX)
-                        .putInt(KEY_CHAT_DY, chatUserDY)
+                        .putInt(hudKey(KEY_CHAT_DX), chatUserDX)
+                        .putInt(hudKey(KEY_CHAT_DY), chatUserDY)
                         .apply()
                     Log.i(TAG, "chat-edit: moved -> offset ($chatUserDX,$chatUserDY)")
                 }
@@ -857,20 +867,15 @@ class MainActivity : AppCompatActivity() {
                 onMinimapCommit = {
                     getSharedPreferences(PREFS_CHAT, MODE_PRIVATE)
                         .edit()
-                        .putInt(KEY_MINIMAP_DX, minimapUserDX)
-                        .putInt(KEY_MINIMAP_DY, minimapUserDY)
+                        .putInt(hudKey(KEY_MINIMAP_DX), minimapUserDX)
+                        .putInt(hudKey(KEY_MINIMAP_DY), minimapUserDY)
                         .apply()
                     Log.i(TAG, "minimap-edit: moved -> offset ($minimapUserDX,$minimapUserDY)")
                 }
                 onDone = { exitOverlayEditMode() }
             }
         // Restore any persisted chat-at-top and minimap overrides so the first frame honours them.
-        getSharedPreferences(PREFS_CHAT, MODE_PRIVATE).let {
-            chatUserDX = it.getInt(KEY_CHAT_DX, 0)
-            chatUserDY = it.getInt(KEY_CHAT_DY, 0)
-            minimapUserDX = it.getInt(KEY_MINIMAP_DX, 0)
-            minimapUserDY = it.getInt(KEY_MINIMAP_DY, 0)
-        }
+        loadHudOffsets()
         chromeOverlay = ChromeOverlayView(this)
         chromeOverlay.onTabTap = { idx ->
             Log.i(TAG, "a6: native tab $idx tap -> openTab")
@@ -4286,9 +4291,15 @@ class MainActivity : AppCompatActivity() {
         Runnable {
             val root = rootContainer
             if (root != null && minOf(root.width, root.height) > 0) {
+                val portrait = root.height > root.width
+                if (portrait != hudPortrait) {
+                    hudPortrait = portrait
+                    loadHudOffsets()
+                }
                 val large = isLargeScreen(root.width, root.height, resources.displayMetrics.density)
-                if (large != largeWindow) {
-                    largeWindow = large
+                val screen = (if (large) "large" else "phone") + (if (portrait) "-portrait" else "")
+                if (screen != zoomScreen) {
+                    zoomScreen = screen
                     syncZoom(0) // logged out, it waits for the login check
                 }
             }
@@ -4336,25 +4347,26 @@ class MainActivity : AppCompatActivity() {
      *  While the zoom is still unknown, the first draws after login, it tries again up to [tries] more times.
      *  UI-thread only. */
     private fun syncZoom(tries: Int) {
-        val large = largeWindow ?: return
+        val screen = zoomScreen ?: return
         JvmLauncher.onBridge {
-            if (!swapZoom(large) && tries > 0) {
+            if (!swapZoom(screen) && tries > 0) {
                 runOnUiThread { rootContainer?.postDelayed({ syncZoom(tries - 1) }, ZOOM_POLL_MS) }
             }
         }
     }
 
     /** FOLD-4: keep a camera zoom per screen class, so a foldable has one zoom folded and another unfolded, as two
-     *  desktop windows of those shapes would want, instead of the player re-pinching at every fold. Nothing is chosen
+     *  desktop windows of those shapes would want, instead of the player re-pinching at every fold. Portrait windows
+     *  are classes of their own ("phone-portrait", "large-portrait"): the 3D view scales with the canvas's height, so a
+     *  landscape zoom looks nearly three times closer on a portrait canvas. Nothing is chosen
      *  for the player: a class keeps the game's zoom as it is until the player has left it once, and from then on
      *  gets back the zoom it had then.
      *  The game saves a single zoom, so the owner pref records which class that zoom is for. When the window's class
      *  is not the owner, the game's zoom is stored for the owner and the window's stored zoom, if any, is set. A
      *  device that never changes class (a phone, a tablet) only ever writes the owner once. Returns false while the
      *  zoom is unknown (logged out, or an older jar). rl-bridge thread only, so the prefs have one writer. */
-    private fun swapZoom(large: Boolean): Boolean {
+    private fun swapZoom(screen: String): Boolean {
         val prefs = getSharedPreferences(PREFS_ZOOM, MODE_PRIVATE)
-        val screen = if (large) "large" else "phone"
         val owner = prefs.getString(KEY_ZOOM_OWNER, null)
         if (owner == null) prefs.edit().putString(KEY_ZOOM_OWNER, screen).apply()
         if (owner == null || owner == screen) return true
@@ -4665,14 +4677,33 @@ class MainActivity : AppCompatActivity() {
         JvmLauncher.onBridge { JvmLauncher.relocateMinimap(mmX, mmY) }
     }
 
+    /** The chat's and the minimap's dragged offsets are kept apart for each orientation (Game settings > Screen): an
+     *  offset dragged on the wide landscape canvas can land the minimap on the chat in portrait. */
+    private fun hudKey(key: String) = if (hudPortrait) "$key.portrait" else key
+
+    /** Load the dragged offsets for [hudPortrait]'s orientation; the next chrome tick places the chat and the minimap
+     *  with them. UI-thread only. */
+    private fun loadHudOffsets() {
+        getSharedPreferences(PREFS_CHAT, MODE_PRIVATE).let {
+            chatUserDX = it.getInt(hudKey(KEY_CHAT_DX), 0)
+            chatUserDY = it.getInt(hudKey(KEY_CHAT_DY), 0)
+            minimapUserDX = it.getInt(hudKey(KEY_MINIMAP_DX), 0)
+            minimapUserDY = it.getInt(hudKey(KEY_MINIMAP_DY), 0)
+        }
+        lastChatX = Int.MIN_VALUE
+        lastChatY = Int.MIN_VALUE
+        lastMmX = Int.MIN_VALUE
+        lastMmY = Int.MIN_VALUE
+    }
+
     /** Drop the minimap's edit-mode offset; the next chrome tick re-applies the automatic top-right placement. */
     private fun resetMinimapOverride() {
         minimapUserDX = 0
         minimapUserDY = 0
         getSharedPreferences(PREFS_CHAT, MODE_PRIVATE)
             .edit()
-            .remove(KEY_MINIMAP_DX)
-            .remove(KEY_MINIMAP_DY)
+            .remove(hudKey(KEY_MINIMAP_DX))
+            .remove(hudKey(KEY_MINIMAP_DY))
             .apply()
         lastMmX = Int.MIN_VALUE
         lastMmY = Int.MIN_VALUE
@@ -5544,9 +5575,15 @@ class MainActivity : AppCompatActivity() {
             val dm = app.resources.displayMetrics
             val longEdge = maxOf(dm.widthPixels, dm.heightPixels)
             val shortEdge = maxOf(1, minOf(dm.widthPixels, dm.heightPixels))
-            // UI-2 / FOLD-1 / FOLD-3: see canvasFor. The boot canvas is landscape whatever the screen reads mid-rotation
-            // (the activity is landscape-locked); a window that later changes shape gets a FOLD-3 resize.
-            val (renderW, renderH) = canvasFor(longEdge, shortEdge, dm.density)
+            // UI-2 / FOLD-1 / FOLD-3: see canvasFor. The boot canvas takes the orientation Game settings > Screen holds
+            // the activity to, whatever the screen reads mid-rotation; a window that later changes shape gets a FOLD-3
+            // resize.
+            val (renderW, renderH) =
+                if (ScreenSetting.portrait(app)) {
+                    canvasFor(shortEdge, longEdge, dm.density)
+                } else {
+                    canvasFor(longEdge, shortEdge, dm.density)
+                }
             canvasW = renderW
             canvasH = renderH // for the overlay free-drag pad → canvas-pixel mapping
             runOnUiThread { fitGameStage() } // FOLD-2: a window already off this shape (split screen) letterboxes now

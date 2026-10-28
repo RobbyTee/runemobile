@@ -283,7 +283,8 @@ class ChromeOverlayView(
      *  tabGridTopForHeight): 85x280 canvas px (58 wide collapsed), flush with the safe right edge. Vertically it takes
      *  the official app's anchor (interface 601, script 919): once the safe area is at least 503 game px tall the
      *  group (and the panel, which the host centres on it) is centred 87 game px below its middle, and below that it
-     *  sits 4 px off its bottom; never past the bottom margin. */
+     *  sits 4 px off its bottom; never past the bottom margin. In portrait the official app has no layout, so the group
+     *  keeps to the bottom corner, in thumb reach, and the screen's middle stays the world's. */
     private fun computeLayout(): Layout {
         if (kx <= 0f || ky <= 0f) {
             lay = Layout(0f, 0f, 0f, 0f)
@@ -298,7 +299,7 @@ class ChromeOverlayView(
         val safeBottom = (height - ins[2]).toFloat()
         val lowest = safeBottom - margin - h
         val top =
-            if ((safeBottom - safeTop) * ky >= 503f) {
+            if (height <= width && (safeBottom - safeTop) * ky >= 503f) {
                 (safeTop + safeBottom) / 2f + 87f / ky - h / 2f
             } else {
                 lowest
