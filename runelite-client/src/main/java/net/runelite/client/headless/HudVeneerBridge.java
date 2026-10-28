@@ -3341,6 +3341,11 @@ public final class HudVeneerBridge
 					display.setOriginalHeight(0);
 				}
 				CHATDISPLAY_PIN.apply(display, OFFICIAL_DISPLAY_X, 0, resized);
+				if (resized)
+				{
+					// Its input line and scroll area are sized from it, and the pin re-lays only the display.
+					display.revalidateScroll();
+				}
 			}
 			forcePos(c, SCROLLAREA_PIN, InterfaceID.Chatbox.SCROLLAREA, OFFICIAL_SCROLLAREA_X, 0);
 			final Widget bar = c.getWidget(InterfaceID.Chatbox.CHATSCROLLBAR);
@@ -3484,6 +3489,9 @@ public final class HudVeneerBridge
 			{
 				c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, val);
 				try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) { BridgeFaults.note("HudVeneerBridge.buildChatbox", ignore); }
+				// The "<player>: <typed>*" line has its own build script, which picks its colours (light with a shadow
+				// over the scene) only when it runs: on the next keystroke, otherwise.
+				try { c.runScript(ScriptID.CHAT_PROMPT_INIT); } catch (RuntimeException ignore) { BridgeFaults.note("HudVeneerBridge.chatPromptInit", ignore); }
 			}
 		}
 		catch (RuntimeException ignore)
@@ -4018,7 +4026,18 @@ public final class HudVeneerBridge
 			}
 			final boolean rebuilt = chatRebuilt;
 			chatRebuilt = false;
-			CHATAREA_PIN.apply(area, 0, areaY, resized || rebuilt);
+			if (CHATAREA_PIN.apply(area, 0, areaY, resized || rebuilt))
+			{
+				// The pin re-lays only the area. The message display inside it (the lines, the "<player>: <typed>*"
+				// input line under them, the scrollbar) would keep the desktop's 142-px area, which puts the input line
+				// below the chat's bottom edge, where the container clips it away. Only that subtree: the prompt layer,
+				// the area's other child, is laid by the game when it opens.
+				final Widget messages = c.getWidget(InterfaceID.Chatbox.MES_LAYER_HIDE);
+				if (messages != null)
+				{
+					messages.revalidateScroll();
+				}
+			}
 			// The prompt layer doesn't follow the area's width on its own.
 			if ((resized || rebuilt) && rowW > CHAT_DEFAULT_W)
 			{
