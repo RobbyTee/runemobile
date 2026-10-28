@@ -6533,7 +6533,9 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
 // frame's strip never shows. Before the bridge is up the request fails, and this runs again on the next tick.
 - (void)resizeCanvasToScreen {
     CGSize size = self.view.bounds.size;
-    if (!self.launched || self.renderW <= 0 || self.pendingRouteCGpuNoResize || size.width <= 0 || size.height <= 0) {
+    // The gated-off ANGLE window present (metalLayer) sizes its drawable once, at launch, so it keeps that canvas.
+    if (!self.launched || self.renderW <= 0 || self.pendingRouteCGpuNoResize || self.metalLayer || size.width <= 0 ||
+        size.height <= 0) {
         self.canvasCheckDue = NO;
         return;
     }
