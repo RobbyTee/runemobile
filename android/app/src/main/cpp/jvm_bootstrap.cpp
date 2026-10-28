@@ -199,6 +199,7 @@ static jmethodID g_midSetStonesHidden = nullptr, g_midOpenTab = nullptr, g_midRe
 static jmethodID g_midRelocateChat = nullptr, g_midRelocateMinimap = nullptr;
 // Phase-3 overlay safe-insets (optional — absent on pre-world-map jars; facadeVoid* null-checks the id).
 static jmethodID g_midSetOverlayInsets = nullptr;
+static jmethodID g_midSetOverlayKeepOut = nullptr; // the shell's controls, kept clear of plugin overlays (optional)
 static jmethodID g_midSetHudStrip = nullptr;
 // Phase-4 chat pill (optional, same rule): collapse toggle + channel switch by op-script replay.
 static jmethodID g_midSetChatCollapsed = nullptr, g_midSwitchChatTab = nullptr;
@@ -1079,6 +1080,7 @@ static bool publishBridge(JNIEnv *env) {
             // OPTIONAL (never in the all-or-nothing check — the snapRadius lesson): a jar predating the
             // world-map/insets surface simply loses overlay inset-avoidance, not the whole veneer.
             g_midSetOverlayInsets  = midOpt(env, hvg, "setOverlaySafeInsets", "(IIII)V");
+            g_midSetOverlayKeepOut = midOpt(env, hvg, "setOverlayKeepOut", "([I)V");
             g_midSetHudStrip = midOpt(env, hvg, "setHudStrip", "(III)V"); // large portrait UI (optional)
             g_midSetChatCollapsed  = midOpt(env, hvg, "setChatCollapsed", "(Z)V");
             g_midSetChatPutAway = midOpt(env, hvg, "setChatPutAway", "(Z)V");
@@ -3042,6 +3044,32 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeSetOverlayInsets(JNIEnv *, jobject, jint l, jint t, jint r, jint b) {
     if (!hudReady()) return;
     facadeVoid4Int(g_hudCls, g_midSetOverlayInsets, l, t, r, b);
+}
+// The shell's own controls over the game, flat {x, y, w, h, ...} in CANVAS px: the shared OverlayRenderer keeps plugin
+// overlay boxes off them (HudVeneerBridge.setOverlayKeepOut). The ART array is copied into a HotSpot one.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetOverlayKeepOut(JNIEnv *artEnv, jobject, jintArray rects) {
+    if (!hudReady() || !g_midSetOverlayKeepOut)
+        return;
+    const jsize n = rects ? artEnv->GetArrayLength(rects) : 0;
+    std::vector<jint> v(n);
+    if (n > 0)
+        artEnv->GetIntArrayRegion(rects, 0, n, v.data());
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_hudCls)
+        return;
+    jintArray a = hs->NewIntArray(n);
+    if (!a) {
+        if (hs->ExceptionCheck())
+            hs->ExceptionClear();
+        return;
+    }
+    if (n > 0)
+        hs->SetIntArrayRegion(a, 0, n, v.data());
+    hs->CallStaticVoidMethod(g_hudCls, g_midSetOverlayKeepOut, a);
+    if (hs->ExceptionCheck())
+        hs->ExceptionClear();
+    hs->DeleteLocalRef(a);
 }
 // Large portrait UI: the canvas rows the screen shows (the hidden strip lies below them) and the band between the chat
 // and the inventory that windows are pinned into. 0 rows turns the strip off.

@@ -98,6 +98,12 @@ class ChatPillView(
         invalidate()
     }
 
+    /** Host: the tab row as drawn, in view px, for the engine to keep plugin overlay boxes off. */
+    fun keepOut(out: MutableList<android.graphics.RectF>) {
+        if (!enabled || !shown || tabs.isEmpty() || tabW <= 0f) return
+        out.add(android.graphics.RectF(rowX, rowY, rowX + (tabs.size - 1) * pitch + tabW, rowY + rowH))
+    }
+
     /** The currently selected channel index (last known); 0 when nothing is reported yet. */
     val currentTab: Int get() = if (activeTab >= 0) activeTab else 0
 

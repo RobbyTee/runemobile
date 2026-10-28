@@ -551,6 +551,9 @@ object JvmLauncher {
         b: Int,
     )
 
+    /** The shell's own controls over the game, flat {x, y, w, h, ...} in CANVAS px: plugin overlay boxes keep off them. */
+    external fun nativeSetOverlayKeepOut(rects: IntArray)
+
     /** Phase-4 chat pill: collapse the chat (shared shove-off-canvas) / switch channel (op-script replay). */
     external fun nativeSetChatCollapsed(collapsed: Boolean)
 
@@ -1066,6 +1069,8 @@ object JvmLauncher {
         r: Int,
         b: Int,
     ) = nativeSetOverlayInsets(l, t, r, b)
+
+    fun setOverlayKeepOut(rects: IntArray) = nativeSetOverlayKeepOut(rects)
 
     fun setChatCollapsed(collapsed: Boolean) = nativeSetChatCollapsed(collapsed)
 

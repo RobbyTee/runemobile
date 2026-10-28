@@ -235,6 +235,13 @@ class ChromeOverlayView(
     val gridTopPx: Float get() = lay.gy0
     val gridHeightPx: Float get() = lay.h
 
+    /** Host: the group and the column as drawn, in view px, for the engine to keep plugin overlay boxes off. */
+    fun keepOut(out: MutableList<RectF>) {
+        if (!shown || !gridEnabled || lay.w <= 0f) return
+        out.add(RectF(lay.gx0, lay.gy0, lay.gx0 + lay.w, lay.gy0 + lay.h))
+        if (!columnX.isNaN()) out.add(RectF(columnStone(0)).apply { union(columnStone(if (chatPutAway) 1 else 2)) })
+    }
+
     /** Host: restore the persisted collapse state (the expand stone itself toggles it and reports [onCollapseToggle]). */
     fun setCollapsed(on: Boolean) {
         if (collapsed != on) {

@@ -332,6 +332,11 @@ class DialogueView(
         return top + layout.height
     }
 
+    /** Host: the parchment as drawn, in view px, for the engine to keep plugin overlay boxes off. */
+    fun keepOut(out: MutableList<RectF>) {
+        if (active && boxW > 0f && boxH > 0f) out.add(RectF(boxX, boxY, boxX + boxW, boxY + boxH))
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!active) return false
         val r = RectF(boxX, boxY, boxX + boxW, boxY + boxH)

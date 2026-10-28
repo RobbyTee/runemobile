@@ -3486,7 +3486,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     updateChrome()
                     updateKeepAwake()
-                    applyOverlayInsets()
+                    applyOverlayAvoid()
                     updateWorldMap()
                     Choreographer.getInstance().postFrameCallback(this)
                 }
@@ -4252,6 +4252,12 @@ class MainActivity : AppCompatActivity() {
     // Phase-3: last overlay-insets values sent to the shared OverlayRenderer (send only on change).
     private var lastOverlayInsets: IntArray? = null
 
+    /** Tells the engine what plugin overlay boxes keep clear of: the safe area and the shell's own controls. */
+    private fun applyOverlayAvoid() {
+        applyOverlayInsets()
+        applyOverlayKeepOut()
+    }
+
     /** Phase-3 overlay safe-insets: convert the full safe-area insets (view px, all four edges) to CANVAS px
      *  and push them to HudVeneerBridge.setOverlaySafeInsets — the shared OverlayRenderer then keeps every
      *  plugin-overlay snap corner clear of the cutout/system bars AND drops TOP_LEFT below the relocated chat
@@ -4269,6 +4275,72 @@ class MainActivity : AppCompatActivity() {
         lastOverlayInsets = canvas
         Log.i(TAG, "p3: overlay safe-insets -> canvas(${canvas[0]},${canvas[1]},${canvas[2]},${canvas[3]})")
         JvmLauncher.onBridge { JvmLauncher.setOverlayInsets(canvas[0], canvas[1], canvas[2], canvas[3]) }
+    }
+
+    // The shell's controls last sent to the engine (applyOverlayKeepOut), and the frames since the last look.
+    private var lastOverlayKeepOut: IntArray? = null
+    private var keepOutFrames = 0
+
+    /** The shell's own controls over the game, sent to the engine so plugin overlay boxes keep off them
+     *  (HudVeneerBridge.setOverlayKeepOut), in CANVAS px: the tab grid and the column, the chat's tab row, the
+     *  dialogue box, and every other clickable view that shows and covers less than a quarter of the game. The engine
+     *  adds its own HUD (the chat, the minimap, the side panel). Every 6th frame; sent only when the list changes. */
+    private fun applyOverlayKeepOut() {
+        if (++keepOutFrames < 6) return
+        keepOutFrames = 0
+        val out = overlayKeepOut()
+        if (out == null || lastOverlayKeepOut?.contentEquals(out) == true) return
+        lastOverlayKeepOut = out
+        Log.i(TAG, "overlay keep-out: ${out.size / 4} control(s)")
+        JvmLauncher.onBridge { JvmLauncher.setOverlayKeepOut(out) }
+    }
+
+    /** The shell's controls for [applyOverlayKeepOut], flat {x, y, w, h, ...} in CANVAS px; null before the game has
+     *  a size. */
+    private fun overlayKeepOut(): IntArray? {
+        val fw = JvmLauncher.frameWidth()
+        val fh = JvmLauncher.frameHeight()
+        val vw = surfaceView.width
+        val vh = surfaceView.height
+        if (fw <= 0 || fh <= 0 || vw <= 0 || vh <= 0) return null
+        val views = ArrayList<RectF>()
+        chromeOverlay.keepOut(views)
+        chatTabOverlay.keepOut(views)
+        dialogueOverlay.keepOut(views)
+        val origin = IntArray(2).also { surfaceView.getLocationInWindow(it) }
+        rootContainer?.let { collectClickable(it, views, origin, vw.toFloat() * vh / 4f) }
+        val kx = fw.toFloat() / vw
+        val ky = fh.toFloat() / vh
+        val out = IntArray(views.size * 4)
+        views.forEachIndexed { i, r ->
+            out[i * 4] = Math.floor((r.left * kx).toDouble()).toInt()
+            out[i * 4 + 1] = Math.floor((r.top * ky).toDouble()).toInt()
+            out[i * 4 + 2] = Math.ceil((r.width() * kx).toDouble()).toInt()
+            out[i * 4 + 3] = Math.ceil((r.height() * ky).toDouble()).toInt()
+        }
+        return out
+    }
+
+    /** Adds each clickable view under [v] that shows and covers less than [maxArea] view px², whole, in the game's
+     *  view px ([origin] is the game's corner in the window). The hold menu and the overlay editor are passed over:
+     *  a box moving off either would chase it. */
+    private fun collectClickable(
+        v: View,
+        out: MutableList<RectF>,
+        origin: IntArray,
+        maxArea: Float,
+    ) {
+        if (v === menuOverlay || v === overlayEditView) return
+        if (v.visibility != View.VISIBLE || v.alpha < 0.01f) return
+        if (v.isClickable && v.width.toFloat() * v.height < maxArea) {
+            val r = android.graphics.Rect()
+            val min = 4 * resources.displayMetrics.density
+            if (v.getGlobalVisibleRect(r) && r.width() >= min && r.height() >= min) {
+                out.add(RectF(r).apply { offset(-origin[0].toFloat(), -origin[1].toFloat()) })
+            }
+        } else if (v is android.view.ViewGroup) {
+            for (i in 0 until v.childCount) collectClickable(v.getChildAt(i), out, origin, maxArea)
+        }
     }
 
     /** Phase-5: parse the published world-map snapshot (per frame, cheap — skipped when the string is
