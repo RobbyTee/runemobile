@@ -1168,13 +1168,31 @@ public final class MobileUiBridge
 				.kv("internalName", d.getInternalName())
 				.kv("displayName", d.getDisplayName())
 				.kvNullable("author", d.getAuthor())
-				.kvNullable("description", d.getDescription())
+				.kvNullable("description", hubDescription(d.getDescription()))
 				.kvNullable("version", d.getVersion())
 				.kvNullable("unavailable", d.getUnavailableReason())
 				.kb("installed", installed.contains(d.getInternalName()))
 				.end();
 		}
 		return out.end().end().toString();
+	}
+
+	/**
+	 * A hub description as plain text for the native rows. Desktop's PluginHubPanel shows one that starts with
+	 * {@code <html>} as HTML in a JLabel and escapes the rest, so only those need their markup taken out.
+	 */
+	static String hubDescription(String desc)
+	{
+		if (desc == null || !desc.startsWith("<html>"))
+		{
+			return desc;
+		}
+		// A line or block break becomes a space so its words don't run together; inline tags just go.
+		final String text = desc.replaceAll("(?i)</?(br|p|div|li|ul|ol|tr|td|h[1-6])\\b[^>]*>", " ")
+			.replaceAll("<[^>]*>", "")
+			.replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
+			.replace("&#39;", "'").replace("&amp;", "&");
+		return text.replaceAll("\\s+", " ").trim();
 	}
 
 	/** Install a hub plugin by internal name (config write + flush so it persists; load happens async). */

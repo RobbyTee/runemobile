@@ -149,6 +149,18 @@ public class MobileUiBridgeTest
 		assertEquals("30", MobileUiBridge.idleWrites(45)[0][2]);
 	}
 
+	@Test
+	public void anHtmlHubDescriptionReachesTheRowsAsPlainText()
+	{
+		assertEquals("Talks to the 1Password CLI. Needs op & a vault",
+			MobileUiBridge.hubDescription("<html>Talks to the <b>1Password</b> CLI.<br>Needs <i>op</i> &amp; a vault</html>"));
+		assertEquals("First. Second, in bold.",
+			MobileUiBridge.hubDescription("<html><p>First.</p><p>Second, in <b>bold</b>.</p></html>"));
+		// Desktop escapes a description without the prefix, so its text stands as written.
+		assertEquals("Shows <b> as typed", MobileUiBridge.hubDescription("Shows <b> as typed"));
+		assertEquals(null, MobileUiBridge.hubDescription(null));
+	}
+
 	private static ConfigDescriptor descriptor(Class<? extends Config> iface)
 	{
 		final ConfigManager cm = mock(ConfigManager.class);
