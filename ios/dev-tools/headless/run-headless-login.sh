@@ -44,7 +44,7 @@ if [ -z "$JX_SESSION_ID" ] || [ -z "$JX_CHARACTER_ID" ]; then
   echo "!! tokens.json has no session_id/chosen_account_id — Stage A of fetch-shield-tokens.sh must succeed" >&2
   exit 1
 fi
-echo "== JX handoff: displayName='${JX_DISPLAY_NAME}' characterId=${JX_CHARACTER_ID} session=${JX_SESSION_ID:0:6}… access=${JX_ACCESS_TOKEN:+set}${JX_ACCESS_TOKEN:-empty} =="
+echo "== JX handoff: displayName='${JX_DISPLAY_NAME}' characterId=${JX_CHARACTER_ID} session=${JX_SESSION_ID:0:6}… access=$([ -n "${JX_ACCESS_TOKEN:-}" ] && echo set || echo empty) =="
 
 mkdir -p "$OUT"
 rm -f "$OUT"/frame-*.png
