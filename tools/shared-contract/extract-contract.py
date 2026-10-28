@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Extract the host-facing contract that BOTH the iOS and Android ports depend on.
 
-The two ports embed the same staged jars and call into them by name via JNI/reflection. The coupling surface
+The two ports embed jars built from the same bridge source and call into them by name via JNI/reflection. The coupling surface
 is therefore narrow and precise: the public-static API of the `net.runelite.client.headless.*` bridges + the
 two boot/activation entry points the native hosts invoke, plus the `-D` gate/property names those classes read.
 A change to any of these can break the *other* port even though its own files were untouched.
 
-Output: a sorted, deterministic list of `METHOD <Class>#<name>(<paramTypes>)` and `FLAG <property>` lines.
-Param names (and a leading `final`) are stripped so only the real signature matters. Run via check-contract.sh.
+Output: a sorted, deterministic list of `METHOD <Class>#<name>(<paramTypes>)`, `FLAG <property>`,
+`PAYLOAD <Class> <key>` and `PAYLOAD-DYNAMIC <Class> count=N` lines (plus `MISSING-FILE` for a vanished source).
+Param names (and a leading `final`) are stripped so only the real signature matters. Run via check-contract.sh;
+gen-bridge-api.py renders the same list as docs/dev/bridge-api-reference.md.
 """
 import os
 import re
@@ -67,7 +69,8 @@ def param_types(params):
     return ','.join(out)
 
 
-def main():
+def collect():
+    """Return the sorted contract lines (what main() prints; gen-bridge-api.py renders the same list)."""
     entries = set()
     missing = []
     for path in FILES:
@@ -92,7 +95,11 @@ def main():
         # A renamed/removed contract file is itself a breaking change — surface it loudly.
         for m in missing:
             entries.add('MISSING-FILE %s' % m)
-    for line in sorted(entries):
+    return sorted(entries)
+
+
+def main():
+    for line in collect():
         print(line)
 
 

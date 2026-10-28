@@ -59,6 +59,9 @@ case "$contract_rc" in
 	2) fail "contract (a removed/changed entry risks breaking the other port — verify both ports, then refresh baseline.txt)" 2 ;;
 	*) fail "contract (check-contract.sh errored, rc=$contract_rc)" "$contract_rc" ;;
 esac
+# The generated reference page renders this same contract with each member's Javadoc; it must match the source.
+"$ROOT/tools/shared-contract/gen-bridge-api.py" --check \
+	|| fail "bridge API reference (stale: run tools/shared-contract/gen-bridge-api.py and commit docs/dev/bridge-api-reference.md)"
 
 # ── Stage 1a: Jagex OAuth wire contract (OAUTH-1) ─────────────────────────────────────────────────────
 # Required, non-bypassable. The three login impls (iOS .m / Android .kt / fetch-shield-tokens.sh) mint

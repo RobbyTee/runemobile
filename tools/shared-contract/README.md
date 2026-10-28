@@ -1,7 +1,8 @@
 # Cross-port shared-contract guard
 
-iOS and Android embed the **same staged jars** and call into them by name (JNI/reflection). The only thing that
-couples the two ports is that **host-facing contract**: the public-static API of the `net.runelite.client.headless.*`
+iOS and Android embed jars built from the **same bridge source** (each port stages its own variants, so the bytes
+differ) and call into them by name (JNI/reflection). The only thing that couples the two ports is that
+**host-facing contract**: the public-static API of the `net.runelite.client.headless.*`
 bridges, the two boot/activation entry points the native hosts invoke (`DeviceHeadlessBoot.main`,
 `UnsafePokeActivation.activate`), and the `-D` gate/property names those classes read. A change there can break the
 *other* port even though none of its own files were touched.
@@ -9,11 +10,18 @@ bridges, the two boot/activation entry points the native hosts invoke (`DeviceHe
 This guard makes such changes impossible to miss.
 
 ## Pieces
-- **`extract-contract.py`** — extracts the contract from source as sorted `METHOD …` / `FLAG …` lines (param
-  names stripped, so only real signatures count).
+- **`extract-contract.py`** — extracts the contract from source as sorted lines: `METHOD …` (param names stripped,
+  so only real signatures count; return types are not recorded), `FLAG …`, `PAYLOAD <Class> <key>` (the JSON keys
+  the native UIs parse), `PAYLOAD-DYNAMIC <Class> count=N` (keys built from variables, pinned by count) and
+  `MISSING-FILE …` (a contract source that was renamed or removed).
 - **`baseline.txt`** — the committed snapshot of the contract.
-- **`check-contract.sh`** — diffs current vs baseline. Exit `0` unchanged, `1` additive-only, `2` removed/changed.
-  `--update` rewrites the baseline.
+- **`check-contract.sh`** — diffs current vs baseline. Exit `0` unchanged, `1` additive-only, `2` removed/changed,
+  `3` no baseline yet. `--update` rewrites the baseline and regenerates the reference page below.
+- **`gen-bridge-api.py`** — renders the same list, with each member's Javadoc, as
+  [`docs/dev/bridge-api-reference.md`](../../docs/dev/bridge-api-reference.md). `--check` exits `1` when the
+  committed page no longer matches the sources; the pre-commit hook (for staged bridge changes) and the release
+  gate's contract pre-flight both run it. A Javadoc edit on a contract member changes the page too, so regenerate
+  it with `tools/shared-contract/gen-bridge-api.py` and stage it with the change.
 - **`../git-hooks/pre-commit`** — on every commit: if staged files feed the shared jars (`runelite-client/`,
   `ios/dev-tools/awtsmoke/`, `tools/stage-*.sh`) it prints a flag; if the contract drifted it **blocks** until you
   stage a refreshed `baseline.txt` (your acknowledgement that you checked the other port).
@@ -30,9 +38,9 @@ The contract changed. Decide if it's safe for the other port, then:
 ./android/dev-tools/bridge-census/run-census-desktop.sh     # Android: expect GREEN
 ./ios/dev-tools/bridge-census/run-census-sim.sh --jars      # iOS: expect GREEN (iOS Simulator, needs the iOS JRE)
 
-# 2. acknowledge by refreshing + staging the baseline, then re-commit
+# 2. acknowledge by refreshing + staging the baseline (and the reference page it regenerates), then re-commit
 ./tools/shared-contract/check-contract.sh --update
-git add tools/shared-contract/baseline.txt
+git add tools/shared-contract/baseline.txt docs/dev/bridge-api-reference.md
 ```
 Additive changes (a new bridge method) are safe — the other port just won't call it yet — but you still stage the
 baseline so it stays truthful. Removed/renamed/re-signatured entries are the real danger and are called out

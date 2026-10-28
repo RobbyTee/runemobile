@@ -2,7 +2,8 @@
 # Compare the current shared iOS/Android contract against the committed baseline.
 #
 #   check-contract.sh            # diff vs baseline; exit 0 unchanged, 1 additive-only, 2 removed/changed
-#   check-contract.sh --update   # rewrite the baseline (acknowledge the current contract)
+#   check-contract.sh --update   # rewrite the baseline (acknowledge the current contract) and regenerate
+#                                # docs/dev/bridge-api-reference.md, which renders the same list
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -12,6 +13,7 @@ CUR="$(python3 "$HERE/extract-contract.py")"
 if [ "${1:-}" = "--update" ]; then
 	printf '%s\n' "$CUR" > "$BASELINE"
 	echo "baseline updated ($(printf '%s\n' "$CUR" | grep -c . ) entries)"
+	python3 "$HERE/gen-bridge-api.py"
 	exit 0
 fi
 
