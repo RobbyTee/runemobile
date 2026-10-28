@@ -1459,8 +1459,11 @@ public class HdPlugin extends Plugin {
 		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rboSceneDepth);
 		checkGLErrors();
 
-		// If necessary, create an FBO for resolving multisampling
-		if (msaaSamples > 1 && resolutionScale != 1) {
+		// If necessary, create an FBO for resolving multisampling. GLES 3.0, unlike desktop GL, also rejects a
+		// multisampled blit whose destination bounds differ from the source's, so a scene viewport off the origin
+		// (the large portrait UI keeps its hidden strip below it) must be resolved first too, or the scene never lands.
+		boolean viewportOffset = sceneViewport[0] != 0 || sceneViewport[1] != 0;
+		if (msaaSamples > 1 && (resolutionScale != 1 || viewportOffset)) {
 			fboSceneResolve = glGenFramebuffers();
 			glBindFramebuffer(GL_FRAMEBUFFER, fboSceneResolve);
 			rboSceneResolveColor = glGenRenderbuffers();
