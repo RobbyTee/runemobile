@@ -136,13 +136,18 @@ fi
 # docs/dev/bridge-api-reference.md is generated from the contract sources' signatures + Javadoc. Block when a
 # staged change to those sources (or a hand edit of the page) leaves the STAGED page different from what the
 # STAGED sources generate, so the published reference can't drift from the code. Both sides come from the index
-# (checked out into a temp tree), so a partially staged edit is judged by what this commit records.
+# (checked out into a temp tree), so a partially staged edit is judged by what this commit records. The scan also
+# reads a few upstream files for the flags the hosts pass; the staged extractor names them (--seam-files).
+apiseams="$(python3 tools/shared-contract/extract-contract.py --seam-files)"
 apifiles="$(printf '%s\n' "$staged" | grep -E '^(runelite-client/src/main/java/net/runelite/client/headless/|ios/dev-tools/awtsmoke/|tools/shared-contract/(extract-contract|gen-bridge-api)\.py$|docs/dev/bridge-api-reference\.md$)' || true)"
+apifiles="$apifiles$(printf '%s\n' "$staged" | grep -Fx -f <(printf '%s\n' "$apiseams") || true)"
 if [ -n "$apifiles" ]; then
 	apiref="docs/dev/bridge-api-reference.md"
 	apiidx="$(mktemp -d)"
 	git ls-files -z -- tools/shared-contract runelite-client/src/main/java/net/runelite/client/headless \
 		ios/dev-tools/awtsmoke "$apiref" | xargs -0 git checkout-index --prefix="$apiidx/" --
+	python3 "$apiidx/tools/shared-contract/extract-contract.py" --seam-files | tr '\n' '\0' \
+		| xargs -0 git checkout-index --prefix="$apiidx/" --
 	set +e
 	python3 "$apiidx/tools/shared-contract/gen-bridge-api.py" --check >/dev/null 2>&1; apirc=$?
 	set -e

@@ -149,13 +149,16 @@ time. It lives in [`tools/shared-contract/`](../../tools/shared-contract/README.
 
 `extract-contract.py` scans a fixed list of source files (the host-facing bridges, `HeadlessLogin`,
 `HeadlessResize`, `RLHDStarter`, `HeadlessSeams`, plus `DeviceHeadlessBoot` and `UnsafePokeActivation` from
-`ios/dev-tools/awtsmoke/`) and prints one sorted line per contract entry.
+`ios/dev-tools/awtsmoke/`) for methods and payload keys, and prints one sorted line per contract entry. It looks for
+flags more widely: in every main-source file of the headless package as well, and in a few upstream files
+(`Hooks`, `PluginManager`, `SplashScreen`, `RuneLiteProperties`), where `SEAM_FLAGS` pins just the properties the
+hosts pass.
 [`baseline.txt`](../../tools/shared-contract/baseline.txt) is the committed copy.
 
 | Kind | Format | Example | Meaning |
 |---|---|---|---|
-| `METHOD` | `METHOD <Class>#<name>(<param types>)` | `METHOD MenuPeekBridge#getPublishSeq()` | A public static method. Parameter names are dropped; the return type is **not** recorded. |
-| `FLAG` | `FLAG <property>` | `FLAG runelite.menupeek` | A system property read with a string literal (`getBoolean`, `getInteger`, `getLong`, `getProperty`). |
+| `METHOD` | `METHOD <Class>#<name>(<param types>) -> <return type>` | `METHOD MenuPeekBridge#getPublishSeq() -> long` | A public static method. Parameter names are dropped. The return type is kept, because the JNI descriptor a shell looks the method up by includes it. |
+| `FLAG` | `FLAG <property>` | `FLAG runelite.menupeek` | A system property the Java reads (`getBoolean`, `getInteger`, `getLong`, `getProperty`) from a literal or a `static final String` constant, or a `runelite.*` literal handed to a helper that reads it. |
 | `PAYLOAD` | `PAYLOAD <Class> <key>` | `PAYLOAD MenuPeekBridge active` | A JSON key the class emits, from `\"key\":` literals and `append...` helper call sites. |
 | `PAYLOAD-DYNAMIC` | `PAYLOAD-DYNAMIC <Class> count=<n>` | `PAYLOAD-DYNAMIC HudVeneerBridge count=3` | How many keys in that class are assembled from variables. The scan cannot see those keys, so it pins their count as a tripwire. |
 | `MISSING-FILE` | `MISSING-FILE <path>` | | A scanned file was renamed or deleted, which is itself a breaking change. |
@@ -194,15 +197,14 @@ Three places enforce it:
 The scan reads source text, so it knows names, not meaning. It misses:
 
 - **Behaviour.** A method that keeps its signature but changes thread, units, timing or semantics.
-- **Return types.** `METHOD` lines record parameters only. Changing `int getFoo()` to `long getFoo()` passes the
-  contract, but the JNI descriptor `()I` no longer matches and the lookup fails at run time. The iOS census
-  catches this, because it resolves the real descriptors; the Android census does not.
 - **JSON shape.** Only key names are pinned. A value that changes type, nesting or units passes.
-- **Keys and flags built from variables.** Keep both literal; a key assembled at run time only moves the
-  `PAYLOAD-DYNAMIC` count.
-- **Files outside the list.** Flags read elsewhere in the package (for example `runelite.rendererpanel`,
-  `runelite.fpsprobe`, `runelite.cpu.unlockfps`) are not pinned. If you add a host-facing bridge class, add it
-  to `FILES` in `extract-contract.py` in the same change.
+- **Keys and flags built from variables.** Keep both literal (a flag may sit in a `static final String`
+  constant); a key assembled at run time only moves the `PAYLOAD-DYNAMIC` count.
+- **Files outside the list.** Methods and keys are read only from `FILES`, so a new host-facing bridge class has to
+  be added there in the same change. A host flag read in an upstream file that is not in `SEAM_FLAGS` is not
+  pinned either; add the file and the flag when a host starts passing it.
+- **Flags only a native host reads.** Android's `runelite.rlhdprobe` and `runelite.routec.smoke` boot modes are
+  matched by `jvm_bootstrap.cpp` itself and read by probes in `android/dev-tools/gpu/`, not by the bridge.
 - **Constants and fields**, and the `RegisterNatives` tables.
 
 Behaviour is covered by the unit tests in `runelite-client/src/test/java/net/runelite/client/headless/`, which

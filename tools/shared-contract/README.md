@@ -4,16 +4,21 @@ iOS and Android embed jars built from the **same bridge source** (each port stag
 differ) and call into them by name (JNI/reflection). The only thing that couples the two ports is that
 **host-facing contract**: the public-static API of the `net.runelite.client.headless.*`
 bridges, the two boot/activation entry points the native hosts invoke (`DeviceHeadlessBoot.main`,
-`UnsafePokeActivation.activate`), and the `-D` gate/property names those classes read. A change there can break the
+`UnsafePokeActivation.activate`), and the `-D` gate/property names the bridge reads. A change there can break the
 *other* port even though none of its own files were touched.
 
 This guard makes such changes impossible to miss.
 
 ## Pieces
-- **`extract-contract.py`** — extracts the contract from source as sorted lines: `METHOD …` (param names stripped,
-  so only real signatures count; return types are not recorded), `FLAG …`, `PAYLOAD <Class> <key>` (the JSON keys
-  the native UIs parse), `PAYLOAD-DYNAMIC <Class> count=N` (keys built from variables, pinned by count) and
-  `MISSING-FILE …` (a contract source that was renamed or removed).
+- **`extract-contract.py`** — extracts the contract from source as sorted lines: `METHOD … -> <return type>` (param
+  names stripped, so only real signatures count; the return type is recorded because the JNI descriptor includes
+  it), `FLAG …`, `PAYLOAD <Class> <key>` (the JSON keys the native UIs parse), `PAYLOAD-DYNAMIC <Class> count=N`
+  (keys built from variables, pinned by count) and `MISSING-FILE …` (a contract source that was renamed or removed).
+  Methods and payload keys come from the `FILES` list. Flags come from every main-source file in the headless
+  package plus `FILES`, and from the upstream files in `SEAM_FLAGS`, which pins only the properties the hosts pass
+  (`runelite.fpsprobe`, `runelite.nosplash`, …) so that an upstream merge diffs the contract only when it touches
+  one of them. A flag counts whether it is read from a literal, through a `static final String` constant, or by a
+  helper the literal is passed to.
 - **`baseline.txt`** — the committed snapshot of the contract.
 - **`check-contract.sh`** — diffs current vs baseline. Exit `0` unchanged, `1` additive-only, `2` removed/changed,
   `3` no baseline yet. `--update` rewrites the baseline and regenerates the reference page below.

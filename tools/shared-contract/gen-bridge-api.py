@@ -26,8 +26,9 @@ _spec.loader.exec_module(ec)
 
 ROOT = ec.ROOT
 OUT = os.path.join(ROOT, 'docs', 'dev', 'bridge-api-reference.md')
-MODIFIERS = {'public', 'static', 'final', 'synchronized', 'native', 'strictfp'}
-FLAG_CALL_RE = r'(Boolean\.getBoolean|Integer\.getInteger|Long\.getLong|System\.getProperty|getBoolean|getInteger|getLong|getProperty)\(\s*"%s"'
+FLAG_CALL_RE = r'(Boolean\.getBoolean|Integer\.getInteger|Long\.getLong|System\.getProperty|getBoolean|getInteger|getLong|getProperty)\(\s*%s'
+READER_FNS = {'getBoolean', 'getInteger', 'getLong', 'getProperty'}
+WRITER_FNS = {'setProperty', 'clearProperty'}
 
 
 # ── comment extraction ──────────────────────────────────────────────────────────────────────────────────────────
@@ -152,8 +153,7 @@ def scan_methods(src):
     for m in ec.METHOD_RE.finditer(src):
         name, params = m.group(1), m.group(2)
         key = '%s(%s)' % (name, ec.param_types(params))
-        pre = src[m.start():m.start(1)].split()
-        ret = ' '.join(t for t in pre if t not in MODIFIERS) or 'void'
+        ret = ec.return_type(src, m)
         shown = ', '.join(re.sub(r'^final\s+', '', p.strip()) for p in params.split(',') if p.strip())
         shown = re.sub(r'\s+', ' ', shown)
         found.setdefault(key, ('%s(%s)' % (name, shown), ret, to_markdown(first_paragraph(comment_before(src, m.start())))))
@@ -166,13 +166,27 @@ def class_summary(src, cls):
 
 
 def flag_details(flag, sources):
-    """(type, default, [reader classes], description) for one -D property, from its read sites."""
-    call_re = re.compile(FLAG_CALL_RE % re.escape(flag) + r'\s*(?:,\s*([^()]*?))?\s*(\)|\()')
+    """(type, default, [reader classes], description) for one -D property, from its read sites.
+
+    A read names the property directly, through a `static final String` constant (whose own comment then describes
+    it), or by handing the literal to a helper method (typed as a string, with no default)."""
     kind, default, readers, desc = None, None, [], ''
     for cls, src in sources:
-        for m in call_re.finditer(src):
-            if cls not in readers:
-                readers.append(cls)
+        names = ['"%s"' % re.escape(flag)]
+        for cm in re.finditer(ec.STRING_CONST_RE % r'([A-Z][A-Z0-9_]*)', src):
+            if cm.group(2) == flag:
+                names.append(re.escape(cm.group(1)) + r'\b')
+                if not desc:
+                    desc = to_markdown(first_paragraph(comment_before(src, src.rfind('\n', 0, cm.start()) + 1)))
+        reads = []
+        for name in names:
+            reads += re.finditer(FLAG_CALL_RE % name + r'\s*(?:,\s*([^()]*?))?\s*(\)|\()', src)
+        helpers = [h for h in re.finditer(r'\b([a-z]\w*)\(\s*"%s"' % re.escape(flag), src) if h.group(1) not in READER_FNS | WRITER_FNS]
+        if (reads or helpers) and cls not in readers:
+            readers.append(cls)
+        if helpers and not reads and kind is None:
+            kind = 'string'
+        for m in sorted(reads, key=lambda r: r.start()):
             fn, arg, closer = m.group(1).split('.')[-1], m.group(2), m.group(3)
             before = src[max(0, m.start() - 40):m.start()]
             if kind is None:
@@ -225,7 +239,7 @@ def render():
         kind, _, rest = line.partition(' ')
         if kind == 'METHOD':
             cls, _, key = rest.partition('#')
-            methods[cls].append(key)
+            methods[cls].append(key.partition(' -> ')[0])
         elif kind == 'PAYLOAD':
             cls, _, key = rest.partition(' ')
             payload[cls].append(key)
@@ -244,7 +258,13 @@ def render():
         with open(path, encoding='utf-8', errors='replace') as fh:
             sources.append((os.path.splitext(os.path.basename(path))[0], fh.read(), path))
     by_class = {cls: (src, path) for cls, src, path in sources}
-    flag_info = {f: flag_details(f, [(c, s) for c, s, _ in sources]) for f in flags}
+    # Flags are read in more files than the classes with a section here (ec.flag_files() and the upstream seams).
+    flag_sources = []
+    for path in ec.flag_files() + sorted(ec.SEAM_FLAGS):
+        with open(path, encoding='utf-8', errors='replace') as fh:
+            flag_sources.append((os.path.splitext(os.path.basename(path))[0], fh.read(), path))
+    flag_paths = {cls: path for cls, _, path in flag_sources}
+    flag_info = {f: flag_details(f, [(c, s) for c, s, _ in flag_sources]) for f in flags}
     flags_by_class = defaultdict(list)
     for f, (_, _, readers, _) in flag_info.items():
         for cls in readers:
@@ -322,7 +342,7 @@ def render():
     for f in sorted(flags):
         kind, default, readers, desc = flag_info[f]
         dflt = '' if default is None else (', default `%s`' % default if default != 'computed' else ', default computed')
-        who = ', '.join('`%s`' % r for r in readers)
+        who = ', '.join('`%s`' % r if r in by_class else '[`%s`](../../%s)' % (r, rel(flag_paths[r])) for r in readers)
         w('- `%s`: %s%s. Read by %s.%s' % (f, kind, dflt, who, (' ' + desc) if desc else ''))
     w('')
     return '\n'.join(o)

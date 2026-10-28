@@ -13,14 +13,14 @@ how the bridge works, which thread each call runs on, and how to change it safel
 
 | Classes | Methods | JSON keys | System properties |
 |---:|---:|---:|---:|
-| 22 | 246 | 280 | 53 |
+| 22 | 246 | 280 | 78 |
 
 ## Classes
 
 - [`ConfigProfileBridge`](#configprofilebridge): 4 methods, 9 JSON keys
 - [`DeviceHeadlessBoot`](#deviceheadlessboot): 1 method, 7 properties
 - [`GrandExchangeBridge`](#grandexchangebridge): 6 methods, 16 JSON keys
-- [`HeadlessLogin`](#headlesslogin): 2 methods, 12 properties
+- [`HeadlessLogin`](#headlesslogin): 2 methods, 14 properties
 - [`HeadlessResize`](#headlessresize): 5 methods, 1 property
 - [`HeadlessSeams`](#headlessseams): 3 methods
 - [`HudDataBridge`](#huddatabridge): 4 methods, 27 JSON keys, 2 properties
@@ -104,7 +104,7 @@ Gate 1c-ii / Phase-4 spike: the minimal slice of input injection needed to cross
 - `tick(Client client, GameState state, int loginIndex)` → `void`  
   Called once per `Hooks.draw` (only when enabled). Drives the login as a two-stage machine: while the EULA dialog is up (stage 1, optional) it synthesizes an Accept click; once the gamepack reaches the authenticated welcome screen (stage 2) it synthesizes a Play Now click. Each stage re-arms until the state advances.
 
-**System properties read:** `runelite.headless.autologin`, `runelite.headless.autologin.cooldown`, `runelite.headless.autologin.eula`, `runelite.headless.autologin.eula.loginIndex`, `runelite.headless.autologin.legacy`, `runelite.headless.autologin.loginIndex`, `runelite.headless.autologin.maxAttempts`, `runelite.headless.autologin.warmup`, `runelite.headless.autologin.welcomeX`, `runelite.headless.autologin.welcomeY`, `runelite.headless.autologin.world`, `runelite.headless.autologin.worldAddress`
+**System properties read:** `runelite.headless.autologin`, `runelite.headless.autologin.cooldown`, `runelite.headless.autologin.eula`, `runelite.headless.autologin.eula.loginIndex`, `runelite.headless.autologin.eula.point`, `runelite.headless.autologin.legacy`, `runelite.headless.autologin.loginIndex`, `runelite.headless.autologin.maxAttempts`, `runelite.headless.autologin.point`, `runelite.headless.autologin.warmup`, `runelite.headless.autologin.welcomeX`, `runelite.headless.autologin.welcomeY`, `runelite.headless.autologin.world`, `runelite.headless.autologin.worldAddress`
 
 ## `HeadlessResize`
 
@@ -753,6 +753,12 @@ Set with `-D<name>=<value>` in the JVM options each port passes at launch. A `bo
 - `java.io.tmpdir`: string, default `"."`. Read by `JavaBridge`.
 - `runelite.bridge`: boolean, default `false`. Read by `JavaBridge`.
 - `runelite.bridge.scrollrects`: boolean, default `false`. Read by `JavaBridge`.
+- `runelite.chatreloc`: boolean, default `false`. Read by [`ChatRelocateProbe`](../../runelite-client/src/main/java/net/runelite/client/headless/ChatRelocateProbe.java).
+- `runelite.chatreloc.dir`: string. Read by [`ChatRelocateProbe`](../../runelite-client/src/main/java/net/runelite/client/headless/ChatRelocateProbe.java).
+- `runelite.cpu.unlockfps`: int, default `0`. Read by [`CpuFpsStarter`](../../runelite-client/src/main/java/net/runelite/client/headless/CpuFpsStarter.java).
+- `runelite.forceDisablePlugins`: string, default `""`. Read by [`PluginManager`](../../runelite-client/src/main/java/net/runelite/client/plugins/PluginManager.java).
+- `runelite.forceEnablePlugins`: string, default `""`. Read by [`PluginManager`](../../runelite-client/src/main/java/net/runelite/client/plugins/PluginManager.java).
+- `runelite.fpsprobe`: boolean, default `false`. Read by [`Hooks`](../../runelite-client/src/main/java/net/runelite/client/callback/Hooks.java). fps probe (off unless -Drunelite.fpsprobe=true; each port's diagnostics switch sets it). headless.FrameStats logs the engine's fps, frame-time and pacing histograms + game state so a log harness can measure in-world.
 - `runelite.gatecensus`: boolean, default `false`. Read by `DeviceHeadlessBoot`.
 - `runelite.gfxIos`: boolean, default `false`. Read by `RLHDStarter`.
 - `runelite.gpuframedump`: boolean, default `false`. Read by `JavaBridge`. GPU Route C white-flash diagnostic (one-shot): dump a handful of in-world composited GPU frames to PNG so the render bug can be seen off-device (the live frame can't be pulled). Gated -Drunelite.gpuframedump=true.
@@ -761,16 +767,26 @@ Set with `-D<name>=<value>` in the JVM options each port passes at launch. A `bo
 - `runelite.headless.autologin.cooldown`: int, default `120`. Read by `HeadlessLogin`.
 - `runelite.headless.autologin.eula`: boolean, default `false`. Read by `HeadlessLogin`. Stage 1 (optional): the EULA Accept/Decline dialog a fresh client shows before the welcome screen. Inert on a client that already accepted (desktop) — loginIndex never equals EULA_LOGIN_INDEX there.
 - `runelite.headless.autologin.eula.loginIndex`: int, default `12`. Read by `HeadlessLogin`.
+- `runelite.headless.autologin.eula.point`: string. Read by `HeadlessLogin`.
 - `runelite.headless.autologin.legacy`: boolean, default `false`. Read by `HeadlessLogin`. Legacy (non-Jagex) account mode: instead of the JX_* welcome screen, drive the classic username/password form. The credentials come from the process ENVIRONMENT (set natively before JNI_CreateJavaVM, like the JX_* handoff) — never from -D opts, which get logged. loginIndex 0 is the initial "Welcome to RuneScape" panel (Enter activates the Existing User form); loginIndex 2 is the username/password form (fields set via the Client API, Enter submits). Non-final only for the test seam (setLegacyEnabledForTest) — production never writes it after clinit.
 - `runelite.headless.autologin.loginIndex`: int, default `10`. Read by `HeadlessLogin`. The "logged into a Jagex account, ready to play" welcome screen — the only login sub-state with a Play Now button. (2 = username/password form, 4 = authenticator.)
 - `runelite.headless.autologin.maxAttempts`: int, default `5`. Read by `HeadlessLogin`.
+- `runelite.headless.autologin.point`: string. Read by `HeadlessLogin`.
 - `runelite.headless.autologin.warmup`: int, default `20`. Read by `HeadlessLogin`.
 - `runelite.headless.autologin.welcomeX`: int, default `382`. Read by `HeadlessLogin`. Fallback point for the "CLICK HERE TO PLAY" button in the 765x503 fixed layout, scaled to the live canvas. Clicked only if the WelcomeScreen.PLAY widget never shows up; the widget's own bounds are the normal target.
 - `runelite.headless.autologin.welcomeY`: int, default `337`. Read by `HeadlessLogin`.
 - `runelite.headless.autologin.world`: int, default `0`. Read by `HeadlessLogin`. Optional: switch to a specific world before clicking Play Now. A throwaway free-to-play account is rejected ("You need a members' account to use this world") if the remembered world is members, so we point it at an F2P world first. World W's host is oldschool{W-300}.runescape.com.
 - `runelite.headless.autologin.worldAddress`: string. Read by `HeadlessLogin`.
-- `runelite.headless.capture.dir`: string. Read by `DeviceHeadlessBoot`.
+- `runelite.headless.capture.dir`: string. Read by `DeviceHeadlessBoot`, [`ChatRelocateProbe`](../../runelite-client/src/main/java/net/runelite/client/headless/ChatRelocateProbe.java), [`HeadlessCapture`](../../runelite-client/src/main/java/net/runelite/client/headless/HeadlessCapture.java), [`MobileUiSmokeRunner`](../../runelite-client/src/main/java/net/runelite/client/headless/MobileUiSmokeRunner.java).
+- `runelite.headless.capture.interval`: int, default `50`. Read by [`HeadlessCapture`](../../runelite-client/src/main/java/net/runelite/client/headless/HeadlessCapture.java).
+- `runelite.headless.capture.max`: int, default `20`. Read by [`HeadlessCapture`](../../runelite-client/src/main/java/net/runelite/client/headless/HeadlessCapture.java).
+- `runelite.headless.capture.preLoginMax`: int, default `6`. Read by [`HeadlessCapture`](../../runelite-client/src/main/java/net/runelite/client/headless/HeadlessCapture.java).
 - `runelite.headless.resize`: string. Read by `HeadlessResize`.
+- `runelite.headless.welcomeplay`: boolean, default `false`. Read by [`WelcomePlayProbe`](../../runelite-client/src/main/java/net/runelite/client/headless/WelcomePlayProbe.java).
+- `runelite.headless.welcomeplay.cooldown`: int, default `40`. Read by [`WelcomePlayProbe`](../../runelite-client/src/main/java/net/runelite/client/headless/WelcomePlayProbe.java).
+- `runelite.headless.welcomeplay.maxAttempts`: int, default `8`. Read by [`WelcomePlayProbe`](../../runelite-client/src/main/java/net/runelite/client/headless/WelcomePlayProbe.java).
+- `runelite.headless.welcomeplay.point`: string. Read by [`WelcomePlayProbe`](../../runelite-client/src/main/java/net/runelite/client/headless/WelcomePlayProbe.java).
+- `runelite.headless.welcomeplay.warmup`: int, default `15`. Read by [`WelcomePlayProbe`](../../runelite-client/src/main/java/net/runelite/client/headless/WelcomePlayProbe.java).
 - `runelite.hover.text`: boolean, default `false`. Read by `HudVeneerBridge`. Whether the engine's hover-option text ("Walk here", top-left) is drawn at all. Off, because this client has no cursor: that label names whatever the engine's tracked point resolves to, and on touch nothing the user did put the point there on purpose. It lingers after a tap and re-names itself as the world turns under it when the camera rotates, since camera rotation writes yaw/pitch directly and never moves the point. The official mobile app shows no hover text for the same reason — there is no hover.
 - `runelite.hub`: boolean, default `false`. Read by `DeviceHeadlessBoot`.
 - `runelite.huddata`: boolean, default `false`. Read by `HudDataBridge`.
@@ -782,6 +798,7 @@ Set with `-D<name>=<value>` in the JVM options each port passes at launch. A `bo
 - `runelite.hudveneer.test.areaW`: int, default `0`. Read by `HudVeneerBridge`.
 - `runelite.hudveneer.test.chatX`: int, default `93`. Read by `HudVeneerBridge`.
 - `runelite.hudveneer.test.chatY`: int, default `8`. Read by `HudVeneerBridge`.
+- `runelite.hudveneer.test.layoutCycle`: boolean, default `false`. Read by [`GameLayoutSwitch`](../../runelite-client/src/main/java/net/runelite/client/headless/GameLayoutSwitch.java). Desktop harness only (ios/dev-tools/headless/run-layout-switch.sh): once logged in, switch the account to Classic and back to Modern through this class, ending with a VERDICT line. An account already on Classic is only switched to Modern. Either way it ends on Modern, the layout the shells need.
 - `runelite.hudveneer.test.minimapScalePct`: int, default `0`. Read by `HudVeneerBridge`.
 - `runelite.hudveneer.test.transparent`: string. Read by `HudVeneerBridge`.
 - `runelite.key.pacing`: boolean, default `true`. Read by `JavaBridge`. Key timing. iOS hands us committed TEXT -- a UITextField change callback -- and never a key down or up, so there is no dwell and no cadence of the user's to report. What we CAN stop doing is reporting one that never happened: every synthesized key used to go out as KEY_PRESSED at t, KEY_TYPED at t+1 and KEY_RELEASED at t+2, three numbers written into the when field of three events dispatched in the same EDT drain. The engine was told "this key was held for two milliseconds" about a key that was held for none, and a whole committed string arrived inside one game tick.
@@ -789,10 +806,18 @@ Set with `-D<name>=<value>` in the JVM options each port passes at launch. A `bo
 - `runelite.menupeek.maxEntries`: int, default `32`. Read by `MenuPeekBridge`. How many entries (from the display top down) to publish — enough for a chip + a native chooser. Raised from 10 so crowded scenes (ground-item piles, busy NPCs) aren't silently truncated in the native menu (MENU-2); the native side scrolls when the list overflows the safe area.
 - `runelite.mobilechrome`: boolean, default `false`. Read by `MobileChromeBridge`.
 - `runelite.mobileui`: boolean, default `false`. Read by `MobileUiBridge`.
+- `runelite.mobileui.hubprobe`: boolean, default `false`. Read by [`MobileUiSmokeRunner`](../../runelite-client/src/main/java/net/runelite/client/headless/MobileUiSmokeRunner.java). ---- plugin-hub de-risk (own phase) ---------------------------------------------------------------
+- `runelite.mobileui.nativeprobe`: boolean, default `false`. Read by [`MobileUiSmokeRunner`](../../runelite-client/src/main/java/net/runelite/client/headless/MobileUiSmokeRunner.java).
+- `runelite.mobileui.panelprobe`: boolean, default `false`. Read by [`MobileUiSmokeRunner`](../../runelite-client/src/main/java/net/runelite/client/headless/MobileUiSmokeRunner.java). ---- plugin side-panel render de-risk (own phase) -------------------------------------------------
+- `runelite.mobileui.smoke`: boolean, default `false`. Read by [`MobileUiSmokeRunner`](../../runelite-client/src/main/java/net/runelite/client/headless/MobileUiSmokeRunner.java).
 - `runelite.nosafemode`: boolean, default `false`. Read by `DeviceHeadlessBoot`.
+- `runelite.nosplash`: boolean, default `false`. Read by [`SplashScreen`](../../runelite-client/src/main/java/net/runelite/client/ui/SplashScreen.java).
+- `runelite.pluginhub.version`: string, default computed. Read by [`RuneLiteProperties`](../../runelite-client/src/main/java/net/runelite/client/RuneLiteProperties.java).
+- `runelite.rendererpanel`: boolean, default `false`. Read by [`RendererPanelStarter`](../../runelite-client/src/main/java/net/runelite/client/headless/RendererPanelStarter.java).
 - `runelite.rlhdOverlaySelfTest`: boolean, default `false`. Read by `RLHDStarter`. PROD-COMPAT-01 bring-up: once 117HD is up, force-compile the dev ShaderOverlay shaders on the live driver so a strict-GLSL-ES typing regression in an overlay surfaces in a device/matrix run (the overlays are dev-toggle-gated and never compile in a default login run). Armed by a pushed marker on Android; off by default.
-- `runelite.routecgpu`: boolean, default `false`. Read by `DeviceHeadlessBoot`.
+- `runelite.routecgpu`: boolean, default `false`. Read by `DeviceHeadlessBoot`, [`RouteCGpuStarter`](../../runelite-client/src/main/java/net/runelite/client/headless/RouteCGpuStarter.java).
 - `runelite.routecrlhd`: boolean, default `false`. Read by `RLHDStarter`.
+- `runelite.session.url`: string. Read by [`RuneLiteHeadless`](../../runelite-client/src/main/java/net/runelite/client/headless/RuneLiteHeadless.java).
 - `runelite.touch.armSlop`: int, default `4`. Read by `JavaBridge`. How far the lift may land from the arm and still commit it. The engine resolved the ARM point and that is where the click goes, so this stays tight: a finger that slid further gets the full gate at its lift point, exactly as it did before arming existed.
 - `runelite.touch.armedTimeout`: int, default `120`. Read by `JavaBridge`. Drop an arm nobody committed after ~2.4s at 50fps. Not a correctness device -- a later tap replaces an arm anyway -- it stops a settled arm from holding the pointer park off forever.
 - `runelite.touch.clickTimeout`: int, default `10`. Read by `JavaBridge`.

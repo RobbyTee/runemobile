@@ -394,7 +394,7 @@ def contract():
         raise InputError(f"missing {rel(CONTRACT)}")
     methods, flags = set(), set()
     for line in CONTRACT.read_text().splitlines():
-        m = re.fullmatch(r"METHOD (\w+)#(\w+)\(([^)]*)\)", line.strip())
+        m = re.fullmatch(r"METHOD (\w+)#(\w+)\(([^)]*)\)(?: -> \S+)?", line.strip())
         if m:
             methods.add((m.group(1), m.group(2), m.group(3)))
         elif line.startswith("FLAG "):

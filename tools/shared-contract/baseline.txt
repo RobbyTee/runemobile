@@ -3,6 +3,12 @@ FLAG headless.runSeconds
 FLAG java.io.tmpdir
 FLAG runelite.bridge
 FLAG runelite.bridge.scrollrects
+FLAG runelite.chatreloc
+FLAG runelite.chatreloc.dir
+FLAG runelite.cpu.unlockfps
+FLAG runelite.forceDisablePlugins
+FLAG runelite.forceEnablePlugins
+FLAG runelite.fpsprobe
 FLAG runelite.gatecensus
 FLAG runelite.gfxIos
 FLAG runelite.gpuframedump
@@ -11,16 +17,26 @@ FLAG runelite.headless.autologin
 FLAG runelite.headless.autologin.cooldown
 FLAG runelite.headless.autologin.eula
 FLAG runelite.headless.autologin.eula.loginIndex
+FLAG runelite.headless.autologin.eula.point
 FLAG runelite.headless.autologin.legacy
 FLAG runelite.headless.autologin.loginIndex
 FLAG runelite.headless.autologin.maxAttempts
+FLAG runelite.headless.autologin.point
 FLAG runelite.headless.autologin.warmup
 FLAG runelite.headless.autologin.welcomeX
 FLAG runelite.headless.autologin.welcomeY
 FLAG runelite.headless.autologin.world
 FLAG runelite.headless.autologin.worldAddress
 FLAG runelite.headless.capture.dir
+FLAG runelite.headless.capture.interval
+FLAG runelite.headless.capture.max
+FLAG runelite.headless.capture.preLoginMax
 FLAG runelite.headless.resize
+FLAG runelite.headless.welcomeplay
+FLAG runelite.headless.welcomeplay.cooldown
+FLAG runelite.headless.welcomeplay.maxAttempts
+FLAG runelite.headless.welcomeplay.point
+FLAG runelite.headless.welcomeplay.warmup
 FLAG runelite.hover.text
 FLAG runelite.hub
 FLAG runelite.huddata
@@ -32,6 +48,7 @@ FLAG runelite.hudveneer.test
 FLAG runelite.hudveneer.test.areaW
 FLAG runelite.hudveneer.test.chatX
 FLAG runelite.hudveneer.test.chatY
+FLAG runelite.hudveneer.test.layoutCycle
 FLAG runelite.hudveneer.test.minimapScalePct
 FLAG runelite.hudveneer.test.transparent
 FLAG runelite.key.pacing
@@ -39,10 +56,18 @@ FLAG runelite.menupeek
 FLAG runelite.menupeek.maxEntries
 FLAG runelite.mobilechrome
 FLAG runelite.mobileui
+FLAG runelite.mobileui.hubprobe
+FLAG runelite.mobileui.nativeprobe
+FLAG runelite.mobileui.panelprobe
+FLAG runelite.mobileui.smoke
 FLAG runelite.nosafemode
+FLAG runelite.nosplash
+FLAG runelite.pluginhub.version
+FLAG runelite.rendererpanel
 FLAG runelite.rlhdOverlaySelfTest
 FLAG runelite.routecgpu
 FLAG runelite.routecrlhd
+FLAG runelite.session.url
 FLAG runelite.touch.armSlop
 FLAG runelite.touch.armedTimeout
 FLAG runelite.touch.clickTimeout
@@ -51,252 +76,252 @@ FLAG runelite.touch.hideClickCross
 FLAG runelite.touch.selFlashMs
 FLAG runelite.touch.settleMax
 FLAG runelite.touch.settleStable
-METHOD ConfigProfileBridge#getProfilesJson()
-METHOD ConfigProfileBridge#init(ConfigManager,ProfileManager,ClientThread)
-METHOD ConfigProfileBridge#isAvailable()
-METHOD ConfigProfileBridge#switchProfile(long)
-METHOD DeviceHeadlessBoot#main(String[])
-METHOD GrandExchangeBridge#getGeJson()
-METHOD GrandExchangeBridge#init(PluginManager,ClientThread)
-METHOD GrandExchangeBridge#isAvailable()
-METHOD GrandExchangeBridge#search(String)
-METHOD GrandExchangeBridge#setUiOpen(boolean)
-METHOD GrandExchangeBridge#tick(Client)
-METHOD HeadlessLogin#isEnabled()
-METHOD HeadlessLogin#tick(Client,GameState,int)
-METHOD HeadlessResize#cameraZoom()
-METHOD HeadlessResize#isEnabled()
-METHOD HeadlessResize#requestResize(int,int)
-METHOD HeadlessResize#requestZoom(int)
-METHOD HeadlessResize#tick(Client,GameState)
-METHOD HeadlessSeams#draw(Client,Graphics)
-METHOD HeadlessSeams#drawScene(Client)
-METHOD HeadlessSeams#postComposite(Client,MainBufferProvider)
-METHOD HudDataBridge#getSeq()
-METHOD HudDataBridge#getSnapshot()
-METHOD HudDataBridge#isEnabled()
-METHOD HudDataBridge#tick(Client)
-METHOD HudVeneerBridge#continueDialogue()
-METHOD HudVeneerBridge#getChatLines()
-METHOD HudVeneerBridge#getChatSnapshot()
-METHOD HudVeneerBridge#getChatSnapshotSeq()
-METHOD HudVeneerBridge#getDialogueJson()
-METHOD HudVeneerBridge#getDialogueSeq()
-METHOD HudVeneerBridge#getMapSnapshot()
-METHOD HudVeneerBridge#getMapSnapshotSeq()
-METHOD HudVeneerBridge#getOrbSnapshot()
-METHOD HudVeneerBridge#getOrbSnapshotSeq()
-METHOD HudVeneerBridge#getOverlayChatAvoid()
-METHOD HudVeneerBridge#getOverlayInsets()
-METHOD HudVeneerBridge#isEnabled()
-METHOD HudVeneerBridge#openTab(int)
-METHOD HudVeneerBridge#openWorldMap()
-METHOD HudVeneerBridge#panWorldMap(int,int)
-METHOD HudVeneerBridge#preRender(Client)
-METHOD HudVeneerBridge#relocateChat(int,int,boolean)
-METHOD HudVeneerBridge#relocateMinimap(int,int)
-METHOD HudVeneerBridge#relocateSidePanel(int,int)
-METHOD HudVeneerBridge#scrollChat(int)
-METHOD HudVeneerBridge#scrollMapPanel(int)
-METHOD HudVeneerBridge#selectDialogueOption(int,long)
-METHOD HudVeneerBridge#setChatAreaWidth(int)
-METHOD HudVeneerBridge#setChatCollapsed(boolean)
-METHOD HudVeneerBridge#setChatHidden(boolean)
-METHOD HudVeneerBridge#setChatPutAway(boolean)
-METHOD HudVeneerBridge#setChatTabRowHeight(int)
-METHOD HudVeneerBridge#setMinimapScale(int)
-METHOD HudVeneerBridge#setOverlaySafeInsets(int,int,int,int)
-METHOD HudVeneerBridge#setStonesHidden(boolean)
-METHOD HudVeneerBridge#switchChatTab(int)
-METHOD HudVeneerBridge#switchToModernLayout()
-METHOD HudVeneerBridge#tabSprites()
-METHOD HudVeneerBridge#tapDialogue(int,int)
-METHOD HudVeneerBridge#tick(Client)
-METHOD InfoBoxBridge#getInfoBoxesJson()
-METHOD InfoBoxBridge#init(PluginManager,ClientThread)
-METHOD InfoBoxBridge#invokeInfoBoxMenu(int,String)
-METHOD InfoBoxBridge#isAvailable()
-METHOD InfoBoxBridge#setUiOpen(boolean)
-METHOD InfoBoxBridge#tick(Client)
-METHOD JavaBridge#armSceneHold()
-METHOD JavaBridge#armTap(int,int)
-METHOD JavaBridge#cameraZoom()
-METHOD JavaBridge#cancelArmedTap()
-METHOD JavaBridge#canvasHeight()
-METHOD JavaBridge#canvasWidth()
-METHOD JavaBridge#clearHover()
-METHOD JavaBridge#devSimulateReconnect(int)
-METHOD JavaBridge#drawSelection(Client)
-METHOD JavaBridge#getFrameHeight()
-METHOD JavaBridge#getFramePixels()
-METHOD JavaBridge#getFrameSeq()
-METHOD JavaBridge#getFrameWidth()
-METHOD JavaBridge#getGpuFrameSeq()
-METHOD JavaBridge#getInteractTapSeq()
-METHOD JavaBridge#getInventoryBounds()
-METHOD JavaBridge#getLastTapKind()
-METHOD JavaBridge#getLastWidgetBounds()
-METHOD JavaBridge#getReorderPaneBounds()
-METHOD JavaBridge#getScrollableRects()
-METHOD JavaBridge#getTapKindSeq()
-METHOD JavaBridge#getTextInputKind()
-METHOD JavaBridge#gpuFrameBackBuffer(int,int)
-METHOD JavaBridge#gpuPublish(int,int)
-METHOD JavaBridge#heapStats()
-METHOD JavaBridge#invokeMenuEntry(int,int)
-METHOD JavaBridge#isEnabled()
-METHOD JavaBridge#isEngineScrollableAt(int,int)
-METHOD JavaBridge#isTextInputOpen()
-METHOD JavaBridge#noteSceneDraw()
-METHOD JavaBridge#onCameraDrag(int,int)
-METHOD JavaBridge#onClick(int,int,int)
-METHOD JavaBridge#onClickPrecise(int,int,int)
-METHOD JavaBridge#onKeyStroke(int)
-METHOD JavaBridge#onKeybind(int,int)
-METHOD JavaBridge#onMiddleClick(int,int)
-METHOD JavaBridge#onMove(int,int)
-METHOD JavaBridge#onTapMove(int,int)
-METHOD JavaBridge#onText(String)
-METHOD JavaBridge#onTouch(int,int,int,int)
-METHOD JavaBridge#onWheel(int,int,int)
-METHOD JavaBridge#parkPointer()
-METHOD JavaBridge#presentReady()
-METHOD JavaBridge#register(Client)
-METHOD JavaBridge#requestResize(int,int)
-METHOD JavaBridge#selectMenuPoint(int,int)
-METHOD JavaBridge#setAltHeld(boolean)
-METHOD JavaBridge#setCameraHold(int,int)
-METHOD JavaBridge#setCameraZoom(int)
-METHOD JavaBridge#setClientThread(ClientThread)
-METHOD JavaBridge#setCtrlHeld(boolean)
-METHOD JavaBridge#setMenuRenderSuppressed(boolean)
-METHOD JavaBridge#setShiftHeld(boolean)
-METHOD JavaBridge#snapshot(MainBufferProvider)
-METHOD JavaBridge#tapTick(Client)
-METHOD LootTrackerBridge#getLootJson()
-METHOD LootTrackerBridge#init(PluginManager,ClientThread)
-METHOD LootTrackerBridge#isAvailable()
-METHOD LootTrackerBridge#resetAll()
-METHOD LootTrackerBridge#setUiOpen(boolean)
-METHOD LootTrackerBridge#tick(Client)
-METHOD MenuPeekBridge#getPublishSeq()
-METHOD MenuPeekBridge#getSnapshot()
-METHOD MenuPeekBridge#getTopFingerprint()
-METHOD MenuPeekBridge#isEnabled()
-METHOD MenuPeekBridge#tick(Client)
-METHOD MobileChromeBridge#getSnapshot()
-METHOD MobileChromeBridge#getSnapshotSeq()
-METHOD MobileChromeBridge#isEnabled()
-METHOD MobileChromeBridge#noteFatalError(String)
-METHOD MobileChromeBridge#tick(Client)
-METHOD MobileUiBridge#boundKeybindsJson()
-METHOD MobileUiBridge#closePanel()
-METHOD MobileUiBridge#fireHotkey(String,String)
-METHOD MobileUiBridge#flushConfig()
-METHOD MobileUiBridge#flushConfigQueued()
-METHOD MobileUiBridge#gameSettings()
-METHOD MobileUiBridge#geAvailable()
-METHOD MobileUiBridge#geJson()
-METHOD MobileUiBridge#geSearch(String)
-METHOD MobileUiBridge#geSetUiOpen(boolean)
-METHOD MobileUiBridge#getChatInputBounds()
-METHOD MobileUiBridge#getConfig(String,String)
-METHOD MobileUiBridge#getMobileUiSeq()
-METHOD MobileUiBridge#getPanelFrameSeq()
-METHOD MobileUiBridge#getPanelHeight()
-METHOD MobileUiBridge#getPanelPixels()
-METHOD MobileUiBridge#getPanelText()
-METHOD MobileUiBridge#getPanelWidth()
-METHOD MobileUiBridge#getPluginConfig(String)
-METHOD MobileUiBridge#getProcessedWriteId()
-METHOD MobileUiBridge#hotkeyActionsJson()
-METHOD MobileUiBridge#hubInstall(String)
-METHOD MobileUiBridge#hubManifest()
-METHOD MobileUiBridge#hubState()
-METHOD MobileUiBridge#hubUninstall(String)
-METHOD MobileUiBridge#init(PluginManager,ConfigManager,ClientThread,Client,EventBus)
-METHOD MobileUiBridge#isChatInputVisible()
-METHOD MobileUiBridge#isEnabled()
-METHOD MobileUiBridge#isPanelTextActive()
-METHOD MobileUiBridge#listPanels()
-METHOD MobileUiBridge#listPlugins()
-METHOD MobileUiBridge#loadAndStartPlugin(String)
-METHOD MobileUiBridge#loadPluginNoStart(String)
-METHOD MobileUiBridge#nextLink()
-METHOD MobileUiBridge#nextNotification()
-METHOD MobileUiBridge#nextScreenshot()
-METHOD MobileUiBridge#notesAvailable()
-METHOD MobileUiBridge#notesGet()
-METHOD MobileUiBridge#notesSet(String)
-METHOD MobileUiBridge#notificationDefaults()
-METHOD MobileUiBridge#openPanel(int)
-METHOD MobileUiBridge#panelClick(int,int)
-METHOD MobileUiBridge#panelKey(int)
-METHOD MobileUiBridge#panelLongPress(int,int)
-METHOD MobileUiBridge#panelMove(int,int)
-METHOD MobileUiBridge#panelText(String)
-METHOD MobileUiBridge#panelWheel(int,int,int)
-METHOD MobileUiBridge#pluginDiag(String)
-METHOD MobileUiBridge#pollMobileUiEvents(long)
-METHOD MobileUiBridge#publishLink(String)
-METHOD MobileUiBridge#publishNotification(String,String)
-METHOD MobileUiBridge#publishNotification(String,String,String,int)
-METHOD MobileUiBridge#registerNav(NavigationButton)
-METHOD MobileUiBridge#resetConfig(String,String)
-METHOD MobileUiBridge#resetPluginConfig(String)
-METHOD MobileUiBridge#rlhdOverlaySelfTest()
-METHOD MobileUiBridge#setConfig(String,String,String)
-METHOD MobileUiBridge#setFpsCap(int)
-METHOD MobileUiBridge#setIdleLogoutMinutes(int)
-METHOD MobileUiBridge#setPinned(String,boolean)
-METHOD MobileUiBridge#setPluginEnabled(String,boolean)
-METHOD MobileUiBridge#tick(Client)
-METHOD MobileUiBridge#unregisterNav(NavigationButton)
-METHOD OverlayBridge#getOverlaysJson()
-METHOD OverlayBridge#init(PluginManager,ClientThread)
-METHOD OverlayBridge#isAvailable()
-METHOD OverlayBridge#resetOverlay(String)
-METHOD OverlayBridge#setOverlayPreferredLocation(String,int,int)
-METHOD OverlayBridge#setOverlayPreferredPosition(String,String)
-METHOD OverlayBridge#setUiOpen(boolean)
-METHOD OverlayBridge#snapPositionForPoint(int,int,int,int)
-METHOD OverlayBridge#tick(Client)
-METHOD QuestHelperBridge#getQuestActiveJson()
-METHOD QuestHelperBridge#getQuestListJson()
-METHOD QuestHelperBridge#init(PluginManager,ClientThread)
-METHOD QuestHelperBridge#isAvailable()
-METHOD QuestHelperBridge#setUiOpen(boolean)
-METHOD QuestHelperBridge#startQuest(String)
-METHOD QuestHelperBridge#stopQuest()
-METHOD QuestHelperBridge#tick(Client)
-METHOD RLHDStarter#isEnabled()
-METHOD RLHDStarter#tick(Client)
-METHOD RuneLiteAccountBridge#getSessionJson()
-METHOD RuneLiteAccountBridge#init(SessionManager)
-METHOD RuneLiteAccountBridge#isAvailable()
-METHOD RuneLiteAccountBridge#logout()
-METHOD RuneLiteAccountBridge#startLogin()
-METHOD TimeTrackingBridge#getTimeTrackingJson()
-METHOD TimeTrackingBridge#init(PluginManager,ClientThread)
-METHOD TimeTrackingBridge#isAvailable()
-METHOD TimeTrackingBridge#setUiOpen(boolean)
-METHOD TimeTrackingBridge#tick(Client)
-METHOD UnsafePokeActivation#activate()
-METHOD UnsafePokeActivation#main(String[])
-METHOD WorldSwitcherBridge#getWorldListJson()
-METHOD WorldSwitcherBridge#hop(int)
-METHOD WorldSwitcherBridge#hopDirection(boolean)
-METHOD WorldSwitcherBridge#init(Client,ClientThread,PluginManager)
-METHOD WorldSwitcherBridge#isAvailable()
-METHOD WorldSwitcherBridge#setFavourite(int,boolean)
-METHOD WorldSwitcherBridge#setUiOpen(boolean)
-METHOD WorldSwitcherBridge#tick(Client)
-METHOD XpTrackerBridge#getSkillIcon(String)
-METHOD XpTrackerBridge#getXpJson()
-METHOD XpTrackerBridge#init(PluginManager,ClientThread)
-METHOD XpTrackerBridge#isAvailable()
-METHOD XpTrackerBridge#setUiOpen(boolean)
-METHOD XpTrackerBridge#tick(Client)
+METHOD ConfigProfileBridge#getProfilesJson() -> String
+METHOD ConfigProfileBridge#init(ConfigManager,ProfileManager,ClientThread) -> void
+METHOD ConfigProfileBridge#isAvailable() -> boolean
+METHOD ConfigProfileBridge#switchProfile(long) -> String
+METHOD DeviceHeadlessBoot#main(String[]) -> void
+METHOD GrandExchangeBridge#getGeJson() -> String
+METHOD GrandExchangeBridge#init(PluginManager,ClientThread) -> void
+METHOD GrandExchangeBridge#isAvailable() -> boolean
+METHOD GrandExchangeBridge#search(String) -> String
+METHOD GrandExchangeBridge#setUiOpen(boolean) -> void
+METHOD GrandExchangeBridge#tick(Client) -> void
+METHOD HeadlessLogin#isEnabled() -> boolean
+METHOD HeadlessLogin#tick(Client,GameState,int) -> void
+METHOD HeadlessResize#cameraZoom() -> int
+METHOD HeadlessResize#isEnabled() -> boolean
+METHOD HeadlessResize#requestResize(int,int) -> void
+METHOD HeadlessResize#requestZoom(int) -> void
+METHOD HeadlessResize#tick(Client,GameState) -> void
+METHOD HeadlessSeams#draw(Client,Graphics) -> void
+METHOD HeadlessSeams#drawScene(Client) -> void
+METHOD HeadlessSeams#postComposite(Client,MainBufferProvider) -> void
+METHOD HudDataBridge#getSeq() -> int
+METHOD HudDataBridge#getSnapshot() -> String
+METHOD HudDataBridge#isEnabled() -> boolean
+METHOD HudDataBridge#tick(Client) -> void
+METHOD HudVeneerBridge#continueDialogue() -> void
+METHOD HudVeneerBridge#getChatLines() -> String
+METHOD HudVeneerBridge#getChatSnapshot() -> String
+METHOD HudVeneerBridge#getChatSnapshotSeq() -> long
+METHOD HudVeneerBridge#getDialogueJson() -> String
+METHOD HudVeneerBridge#getDialogueSeq() -> long
+METHOD HudVeneerBridge#getMapSnapshot() -> String
+METHOD HudVeneerBridge#getMapSnapshotSeq() -> long
+METHOD HudVeneerBridge#getOrbSnapshot() -> String
+METHOD HudVeneerBridge#getOrbSnapshotSeq() -> long
+METHOD HudVeneerBridge#getOverlayChatAvoid() -> int[]
+METHOD HudVeneerBridge#getOverlayInsets() -> int[]
+METHOD HudVeneerBridge#isEnabled() -> boolean
+METHOD HudVeneerBridge#openTab(int) -> void
+METHOD HudVeneerBridge#openWorldMap() -> void
+METHOD HudVeneerBridge#panWorldMap(int,int) -> void
+METHOD HudVeneerBridge#preRender(Client) -> void
+METHOD HudVeneerBridge#relocateChat(int,int,boolean) -> void
+METHOD HudVeneerBridge#relocateMinimap(int,int) -> void
+METHOD HudVeneerBridge#relocateSidePanel(int,int) -> void
+METHOD HudVeneerBridge#scrollChat(int) -> void
+METHOD HudVeneerBridge#scrollMapPanel(int) -> void
+METHOD HudVeneerBridge#selectDialogueOption(int,long) -> void
+METHOD HudVeneerBridge#setChatAreaWidth(int) -> void
+METHOD HudVeneerBridge#setChatCollapsed(boolean) -> void
+METHOD HudVeneerBridge#setChatHidden(boolean) -> void
+METHOD HudVeneerBridge#setChatPutAway(boolean) -> void
+METHOD HudVeneerBridge#setChatTabRowHeight(int) -> void
+METHOD HudVeneerBridge#setMinimapScale(int) -> void
+METHOD HudVeneerBridge#setOverlaySafeInsets(int,int,int,int) -> void
+METHOD HudVeneerBridge#setStonesHidden(boolean) -> void
+METHOD HudVeneerBridge#switchChatTab(int) -> void
+METHOD HudVeneerBridge#switchToModernLayout() -> void
+METHOD HudVeneerBridge#tabSprites() -> String
+METHOD HudVeneerBridge#tapDialogue(int,int) -> void
+METHOD HudVeneerBridge#tick(Client) -> void
+METHOD InfoBoxBridge#getInfoBoxesJson() -> String
+METHOD InfoBoxBridge#init(PluginManager,ClientThread) -> void
+METHOD InfoBoxBridge#invokeInfoBoxMenu(int,String) -> String
+METHOD InfoBoxBridge#isAvailable() -> boolean
+METHOD InfoBoxBridge#setUiOpen(boolean) -> void
+METHOD InfoBoxBridge#tick(Client) -> void
+METHOD JavaBridge#armSceneHold() -> void
+METHOD JavaBridge#armTap(int,int) -> void
+METHOD JavaBridge#cameraZoom() -> int
+METHOD JavaBridge#cancelArmedTap() -> void
+METHOD JavaBridge#canvasHeight() -> int
+METHOD JavaBridge#canvasWidth() -> int
+METHOD JavaBridge#clearHover() -> void
+METHOD JavaBridge#devSimulateReconnect(int) -> void
+METHOD JavaBridge#drawSelection(Client) -> void
+METHOD JavaBridge#getFrameHeight() -> int
+METHOD JavaBridge#getFramePixels() -> int[]
+METHOD JavaBridge#getFrameSeq() -> int
+METHOD JavaBridge#getFrameWidth() -> int
+METHOD JavaBridge#getGpuFrameSeq() -> int
+METHOD JavaBridge#getInteractTapSeq() -> int
+METHOD JavaBridge#getInventoryBounds() -> int[]
+METHOD JavaBridge#getLastTapKind() -> int
+METHOD JavaBridge#getLastWidgetBounds() -> long
+METHOD JavaBridge#getReorderPaneBounds() -> int[]
+METHOD JavaBridge#getScrollableRects() -> int[]
+METHOD JavaBridge#getTapKindSeq() -> int
+METHOD JavaBridge#getTextInputKind() -> int
+METHOD JavaBridge#gpuFrameBackBuffer(int,int) -> int[]
+METHOD JavaBridge#gpuPublish(int,int) -> void
+METHOD JavaBridge#heapStats() -> String
+METHOD JavaBridge#invokeMenuEntry(int,int) -> void
+METHOD JavaBridge#isEnabled() -> boolean
+METHOD JavaBridge#isEngineScrollableAt(int,int) -> boolean
+METHOD JavaBridge#isTextInputOpen() -> boolean
+METHOD JavaBridge#noteSceneDraw() -> void
+METHOD JavaBridge#onCameraDrag(int,int) -> void
+METHOD JavaBridge#onClick(int,int,int) -> void
+METHOD JavaBridge#onClickPrecise(int,int,int) -> void
+METHOD JavaBridge#onKeyStroke(int) -> void
+METHOD JavaBridge#onKeybind(int,int) -> void
+METHOD JavaBridge#onMiddleClick(int,int) -> void
+METHOD JavaBridge#onMove(int,int) -> void
+METHOD JavaBridge#onTapMove(int,int) -> void
+METHOD JavaBridge#onText(String) -> void
+METHOD JavaBridge#onTouch(int,int,int,int) -> void
+METHOD JavaBridge#onWheel(int,int,int) -> void
+METHOD JavaBridge#parkPointer() -> void
+METHOD JavaBridge#presentReady() -> boolean
+METHOD JavaBridge#register(Client) -> void
+METHOD JavaBridge#requestResize(int,int) -> void
+METHOD JavaBridge#selectMenuPoint(int,int) -> void
+METHOD JavaBridge#setAltHeld(boolean) -> void
+METHOD JavaBridge#setCameraHold(int,int) -> void
+METHOD JavaBridge#setCameraZoom(int) -> void
+METHOD JavaBridge#setClientThread(ClientThread) -> void
+METHOD JavaBridge#setCtrlHeld(boolean) -> void
+METHOD JavaBridge#setMenuRenderSuppressed(boolean) -> void
+METHOD JavaBridge#setShiftHeld(boolean) -> void
+METHOD JavaBridge#snapshot(MainBufferProvider) -> void
+METHOD JavaBridge#tapTick(Client) -> void
+METHOD LootTrackerBridge#getLootJson() -> String
+METHOD LootTrackerBridge#init(PluginManager,ClientThread) -> void
+METHOD LootTrackerBridge#isAvailable() -> boolean
+METHOD LootTrackerBridge#resetAll() -> String
+METHOD LootTrackerBridge#setUiOpen(boolean) -> void
+METHOD LootTrackerBridge#tick(Client) -> void
+METHOD MenuPeekBridge#getPublishSeq() -> long
+METHOD MenuPeekBridge#getSnapshot() -> String
+METHOD MenuPeekBridge#getTopFingerprint() -> String
+METHOD MenuPeekBridge#isEnabled() -> boolean
+METHOD MenuPeekBridge#tick(Client) -> void
+METHOD MobileChromeBridge#getSnapshot() -> String
+METHOD MobileChromeBridge#getSnapshotSeq() -> long
+METHOD MobileChromeBridge#isEnabled() -> boolean
+METHOD MobileChromeBridge#noteFatalError(String) -> void
+METHOD MobileChromeBridge#tick(Client) -> void
+METHOD MobileUiBridge#boundKeybindsJson() -> String
+METHOD MobileUiBridge#closePanel() -> String
+METHOD MobileUiBridge#fireHotkey(String,String) -> void
+METHOD MobileUiBridge#flushConfig() -> String
+METHOD MobileUiBridge#flushConfigQueued() -> String
+METHOD MobileUiBridge#gameSettings() -> String
+METHOD MobileUiBridge#geAvailable() -> boolean
+METHOD MobileUiBridge#geJson() -> String
+METHOD MobileUiBridge#geSearch(String) -> String
+METHOD MobileUiBridge#geSetUiOpen(boolean) -> String
+METHOD MobileUiBridge#getChatInputBounds() -> int[]
+METHOD MobileUiBridge#getConfig(String,String) -> String
+METHOD MobileUiBridge#getMobileUiSeq() -> long
+METHOD MobileUiBridge#getPanelFrameSeq() -> int
+METHOD MobileUiBridge#getPanelHeight() -> int
+METHOD MobileUiBridge#getPanelPixels() -> int[]
+METHOD MobileUiBridge#getPanelText() -> String
+METHOD MobileUiBridge#getPanelWidth() -> int
+METHOD MobileUiBridge#getPluginConfig(String) -> String
+METHOD MobileUiBridge#getProcessedWriteId() -> long
+METHOD MobileUiBridge#hotkeyActionsJson() -> String
+METHOD MobileUiBridge#hubInstall(String) -> String
+METHOD MobileUiBridge#hubManifest() -> String
+METHOD MobileUiBridge#hubState() -> String
+METHOD MobileUiBridge#hubUninstall(String) -> String
+METHOD MobileUiBridge#init(PluginManager,ConfigManager,ClientThread,Client,EventBus) -> void
+METHOD MobileUiBridge#isChatInputVisible() -> boolean
+METHOD MobileUiBridge#isEnabled() -> boolean
+METHOD MobileUiBridge#isPanelTextActive() -> boolean
+METHOD MobileUiBridge#listPanels() -> String
+METHOD MobileUiBridge#listPlugins() -> String
+METHOD MobileUiBridge#loadAndStartPlugin(String) -> String
+METHOD MobileUiBridge#loadPluginNoStart(String) -> String
+METHOD MobileUiBridge#nextLink() -> String
+METHOD MobileUiBridge#nextNotification() -> String
+METHOD MobileUiBridge#nextScreenshot() -> String
+METHOD MobileUiBridge#notesAvailable() -> boolean
+METHOD MobileUiBridge#notesGet() -> String
+METHOD MobileUiBridge#notesSet(String) -> String
+METHOD MobileUiBridge#notificationDefaults() -> String
+METHOD MobileUiBridge#openPanel(int) -> String
+METHOD MobileUiBridge#panelClick(int,int) -> String
+METHOD MobileUiBridge#panelKey(int) -> String
+METHOD MobileUiBridge#panelLongPress(int,int) -> String
+METHOD MobileUiBridge#panelMove(int,int) -> String
+METHOD MobileUiBridge#panelText(String) -> String
+METHOD MobileUiBridge#panelWheel(int,int,int) -> String
+METHOD MobileUiBridge#pluginDiag(String) -> String
+METHOD MobileUiBridge#pollMobileUiEvents(long) -> String
+METHOD MobileUiBridge#publishLink(String) -> void
+METHOD MobileUiBridge#publishNotification(String,String) -> void
+METHOD MobileUiBridge#publishNotification(String,String,String,int) -> void
+METHOD MobileUiBridge#registerNav(NavigationButton) -> void
+METHOD MobileUiBridge#resetConfig(String,String) -> String
+METHOD MobileUiBridge#resetPluginConfig(String) -> String
+METHOD MobileUiBridge#rlhdOverlaySelfTest() -> String
+METHOD MobileUiBridge#setConfig(String,String,String) -> String
+METHOD MobileUiBridge#setFpsCap(int) -> String
+METHOD MobileUiBridge#setIdleLogoutMinutes(int) -> String
+METHOD MobileUiBridge#setPinned(String,boolean) -> String
+METHOD MobileUiBridge#setPluginEnabled(String,boolean) -> String
+METHOD MobileUiBridge#tick(Client) -> void
+METHOD MobileUiBridge#unregisterNav(NavigationButton) -> void
+METHOD OverlayBridge#getOverlaysJson() -> String
+METHOD OverlayBridge#init(PluginManager,ClientThread) -> void
+METHOD OverlayBridge#isAvailable() -> boolean
+METHOD OverlayBridge#resetOverlay(String) -> String
+METHOD OverlayBridge#setOverlayPreferredLocation(String,int,int) -> String
+METHOD OverlayBridge#setOverlayPreferredPosition(String,String) -> String
+METHOD OverlayBridge#setUiOpen(boolean) -> void
+METHOD OverlayBridge#snapPositionForPoint(int,int,int,int) -> String
+METHOD OverlayBridge#tick(Client) -> void
+METHOD QuestHelperBridge#getQuestActiveJson() -> String
+METHOD QuestHelperBridge#getQuestListJson() -> String
+METHOD QuestHelperBridge#init(PluginManager,ClientThread) -> void
+METHOD QuestHelperBridge#isAvailable() -> boolean
+METHOD QuestHelperBridge#setUiOpen(boolean) -> void
+METHOD QuestHelperBridge#startQuest(String) -> void
+METHOD QuestHelperBridge#stopQuest() -> void
+METHOD QuestHelperBridge#tick(Client) -> void
+METHOD RLHDStarter#isEnabled() -> boolean
+METHOD RLHDStarter#tick(Client) -> void
+METHOD RuneLiteAccountBridge#getSessionJson() -> String
+METHOD RuneLiteAccountBridge#init(SessionManager) -> void
+METHOD RuneLiteAccountBridge#isAvailable() -> boolean
+METHOD RuneLiteAccountBridge#logout() -> void
+METHOD RuneLiteAccountBridge#startLogin() -> void
+METHOD TimeTrackingBridge#getTimeTrackingJson() -> String
+METHOD TimeTrackingBridge#init(PluginManager,ClientThread) -> void
+METHOD TimeTrackingBridge#isAvailable() -> boolean
+METHOD TimeTrackingBridge#setUiOpen(boolean) -> void
+METHOD TimeTrackingBridge#tick(Client) -> void
+METHOD UnsafePokeActivation#activate() -> void
+METHOD UnsafePokeActivation#main(String[]) -> void
+METHOD WorldSwitcherBridge#getWorldListJson() -> String
+METHOD WorldSwitcherBridge#hop(int) -> void
+METHOD WorldSwitcherBridge#hopDirection(boolean) -> void
+METHOD WorldSwitcherBridge#init(Client,ClientThread,PluginManager) -> void
+METHOD WorldSwitcherBridge#isAvailable() -> boolean
+METHOD WorldSwitcherBridge#setFavourite(int,boolean) -> void
+METHOD WorldSwitcherBridge#setUiOpen(boolean) -> void
+METHOD WorldSwitcherBridge#tick(Client) -> void
+METHOD XpTrackerBridge#getSkillIcon(String) -> String
+METHOD XpTrackerBridge#getXpJson() -> String
+METHOD XpTrackerBridge#init(PluginManager,ClientThread) -> void
+METHOD XpTrackerBridge#isAvailable() -> boolean
+METHOD XpTrackerBridge#setUiOpen(boolean) -> void
+METHOD XpTrackerBridge#tick(Client) -> void
 PAYLOAD ConfigProfileBridge active
 PAYLOAD ConfigProfileBridge available
 PAYLOAD ConfigProfileBridge error
