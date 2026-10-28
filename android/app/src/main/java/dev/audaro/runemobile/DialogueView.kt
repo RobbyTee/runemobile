@@ -125,6 +125,9 @@ class DialogueView(
         return true
     }
 
+    /** How much smaller than canvas px the chat shows (the large portrait UI shows it at 600/765); the box follows. */
+    var chatScale = 1f
+
     /** Drive each frame: [chatSnap] (for the dialogueActive/topLevel gate) + [dlg] + canvas→view scale. */
     fun update(
         chatSnap: String,
@@ -160,8 +163,8 @@ class DialogueView(
 
         boxX = cd.optInt("chatX", 0) * sx
         boxY = cd.optInt("chatY", 0) * sy
-        boxW = CHAT_W * sx
-        boxH = BOX_H_CANVAS * sy
+        boxW = CHAT_W * chatScale * sx
+        boxH = BOX_H_CANVAS * chatScale * sy
         active = true
 
         val cont = d.optJSONObject("cont")

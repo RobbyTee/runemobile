@@ -1132,6 +1132,13 @@ extern "C" void RouteC_setPresentCallbacks(void* (*acq)(uint64_t*), uint64_t (*g
     LOGI("present callbacks set — direct EGL window-surface present armed");
 }
 
+// Large portrait UI: jvm_bootstrap's map from the canvas height to the rows the screen shows (the top ones; the strip
+// below them holds the full-size chat and minimap the bridge copies back). Absent, every row shows.
+static int (*sCbShownRows)(int) = nullptr;
+extern "C" void RouteC_setShownRows(int (*rows)(int)) {
+    sCbShownRows = rows;
+}
+
 // Phase 3 (auto-GPU watchdog): frames presented so far on the direct path. jvm_bootstrap dlsym's this and exposes it
 // to Kotlin (JvmLauncher.nativeGpuFramesPresented) so the first-boot fallback can tell "renderer activated" from
 // "failed/black/crashed" without any per-frame plumbing.
@@ -1213,6 +1220,7 @@ static void JNICALL rc_AWT_swapBuffers(JNIEnv* env, jobject){
         // Publish the live canvas dims so touch->game mapping works (the CPU present thread that used to set them
         // is disabled in this mode).
         if (sCbSetFrameDims) sCbSetFrameDims(w, h);
+        const int rows = sCbShownRows ? sCbShownRows(h) : h;
         // Direct EGL present. If the Surface isn't ready yet, skip this frame (it stays in the FBO) — the CPU
         // present thread is disabled in this mode, so do NOT fall back to readback (nothing would consume it).
         if (rcEnsureWindowSurface()) {
@@ -1226,7 +1234,8 @@ static void JNICALL rc_AWT_swapBuffers(JNIEnv* env, jobject){
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);                       // the window surface's default framebuffer
             // Both src (FBO) and dst (window default fb) are GL bottom-left origin, so a 1:1 blit presents upright
             // (eglSwapBuffers maps GL bottom-left -> screen). If it shows inverted on device, swap the dst Y extents.
-            glBlitFramebuffer(0, 0, w, h,  0, 0, sw, sh,  GL_COLOR_BUFFER_BIT, GL_LINEAR);
+            // GL rows run bottom-up, so the canvas's top rows are the FBO's last ones.
+            glBlitFramebuffer(0, h - rows, w, h, 0, 0, sw, sh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
             if (sPresentProbe < 0) {
                 sPresentProbe = rc_fpsprobe_armed(env) ? 1 : 0;
                 LOGI("[presentprobe] %s (-Drunelite.fpsprobe)", sPresentProbe ? "armed" : "off");

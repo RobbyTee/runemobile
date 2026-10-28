@@ -221,7 +221,23 @@ object JvmLauncher {
     /** Latest composited frame dimensions (game-canvas pixels), or 0 before the first frame. */
     external fun nativeFrameWidth(): Int
 
+    /** The height counts only the rows the screen shows ([nativeSetShownRows]). */
     external fun nativeFrameHeight(): Int
+
+    /** The last frame's full canvas height, rows hidden under the screen included; 0 before the first frame. */
+    external fun nativeCanvasHeight(): Int
+
+    /** Large portrait UI: show only the canvas's top [rows] rows (0 = all); the strip below holds the full-size chat
+     *  and minimap. Any thread. */
+    external fun nativeSetShownRows(rows: Int)
+
+    /** Large portrait UI: tell the bridge the shown rows and the band (canvas px) windows are pinned into
+     *  (HudVeneerBridge.setHudStrip); 0 rows turns the strip off. Off the UI thread (via [onBridge]). */
+    external fun nativeSetHudStrip(
+        visibleRows: Int,
+        top: Int,
+        bottom: Int,
+    )
 
     /** Phase 3 (auto-GPU watchdog): frames the GPU/117HD renderer has actually presented. 0 == renderer not armed or
      *  never activated (failed/black/crashed); a climbing value == it activated and is presenting. */
@@ -724,6 +740,16 @@ object JvmLauncher {
     fun frameWidth() = nativeFrameWidth()
 
     fun frameHeight() = nativeFrameHeight()
+
+    fun canvasHeight() = nativeCanvasHeight()
+
+    fun setShownRows(rows: Int) = nativeSetShownRows(rows)
+
+    fun setHudStrip(
+        visibleRows: Int,
+        top: Int,
+        bottom: Int,
+    ) = nativeSetHudStrip(visibleRows, top, bottom)
 
     fun framePixels(): IntArray? = nativeFramePixels()
 

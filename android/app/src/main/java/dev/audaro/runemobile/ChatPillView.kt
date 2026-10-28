@@ -101,6 +101,9 @@ class ChatPillView(
     /** The currently selected channel index (last known); 0 when nothing is reported yet. */
     val currentTab: Int get() = if (activeTab >= 0) activeTab else 0
 
+    /** How much smaller than canvas px the chat shows (the large portrait UI shows it at 600/765); the stones follow. */
+    var chatScale = 1f
+
     /** Feed the latest chat snapshot + canvas→view scale each frame. Returns the tab count parsed. */
     fun update(
         json: String,
@@ -141,11 +144,11 @@ class ChatPillView(
                 enabled = true
                 return 0
             }
-        rowX = (o.optInt("chatX", 0) + TAB_X) * sx
-        rowY = (o.optInt("chatY", 0) + TAB_Y) * sy
-        pitch = TAB_PITCH * sx
-        tabW = TAB_W * sx
-        rowH = TAB_H * sy
+        rowX = (o.optInt("chatX", 0) + TAB_X * chatScale) * sx
+        rowY = (o.optInt("chatY", 0) + TAB_Y * chatScale) * sy
+        pitch = TAB_PITCH * chatScale * sx
+        tabW = TAB_W * chatScale * sx
+        rowH = TAB_H * chatScale * sy
         val list = ArrayList<Tab>(TAB_COUNT)
         var snapSel = -1
         val n = minOf(TAB_COUNT, arr.length())

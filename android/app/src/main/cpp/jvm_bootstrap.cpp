@@ -199,6 +199,7 @@ static jmethodID g_midSetStonesHidden = nullptr, g_midOpenTab = nullptr, g_midRe
 static jmethodID g_midRelocateChat = nullptr, g_midRelocateMinimap = nullptr;
 // Phase-3 overlay safe-insets (optional — absent on pre-world-map jars; facadeVoid* null-checks the id).
 static jmethodID g_midSetOverlayInsets = nullptr;
+static jmethodID g_midSetHudStrip = nullptr;
 // Phase-4 chat pill (optional, same rule): collapse toggle + channel switch by op-script replay.
 static jmethodID g_midSetChatCollapsed = nullptr, g_midSwitchChatTab = nullptr;
 // The speech bubbles by the chat (optional): put the whole chat away, filter stones included.
@@ -272,7 +273,8 @@ static volatile bool   g_renderRun = false;
 // model. Two separate atomics suffice — the login canvas dims are fixed, so a torn {w,h} pair (which
 // would only matter mid-resize) can't arise in this scope.
 static std::atomic<int> g_lastFrameW{0};
-static std::atomic<int> g_lastFrameH{0};
+static std::atomic<int> g_lastFrameH{0};  // the rows shown (see g_shownRows)
+static std::atomic<int> g_lastCanvasH{0}; // the engine canvas's full height, any hidden strip included
 // Phase 3 (auto-GPU watchdog): resolved from librlawt via dlsym when direct present is armed; returns the count of
 // frames presented by the GPU/117HD renderer (0 if not armed / renderer never activated). Polled by Kotlin.
 static uint64_t (*g_routecFramesPresented)() = nullptr;
@@ -286,8 +288,20 @@ static bool g_cpuPresentProbe = false;
 // Present seam (cont.): in direct-present mode the CPU present thread no longer runs (it's where g_lastFrameW/H
 // were set), so librlawt publishes the live canvas dims here each frame — touch->game coordinate mapping
 // (JvmLauncher.frameWidth/Height) depends on them, else clicks map off-canvas.
+// Large portrait UI: the canvas runs taller than the screen shows (HudStrip keeps a strip below the game view for the
+// full-size chat and minimap, which the bridge copies back at the 765 size). Both present paths show only the top
+// rows and publish that height as the frame's, so touch maps over the shown canvas. 0 = show every row.
+static std::atomic<int> g_shownRows{0};
+static int shownRows(int h) {
+    const int rows = g_shownRows.load(std::memory_order_relaxed);
+    return rows > 0 && rows < h ? rows : h;
+}
 static void rcPresentSetFrameDims(int w, int h) {
-    if (w > 0 && h > 0) { g_lastFrameW.store(w, std::memory_order_relaxed); g_lastFrameH.store(h, std::memory_order_relaxed); }
+    if (w > 0 && h > 0) {
+        g_lastFrameW.store(w, std::memory_order_relaxed);
+        g_lastCanvasH.store(h, std::memory_order_relaxed);
+        g_lastFrameH.store(shownRows(h), std::memory_order_relaxed);
+    }
 }
 
 // A1 read-surface published by the render thread (the only HotSpot-attached caller) for the UI thread to read
@@ -1065,6 +1079,7 @@ static bool publishBridge(JNIEnv *env) {
             // OPTIONAL (never in the all-or-nothing check — the snapRadius lesson): a jar predating the
             // world-map/insets surface simply loses overlay inset-avoidance, not the whole veneer.
             g_midSetOverlayInsets  = midOpt(env, hvg, "setOverlaySafeInsets", "(IIII)V");
+            g_midSetHudStrip = midOpt(env, hvg, "setHudStrip", "(III)V"); // large portrait UI (optional)
             g_midSetChatCollapsed  = midOpt(env, hvg, "setChatCollapsed", "(Z)V");
             g_midSetChatPutAway = midOpt(env, hvg, "setChatPutAway", "(Z)V");
             g_midSwitchChatTab     = midOpt(env, hvg, "switchChatTab", "(I)V");
@@ -1296,6 +1311,8 @@ static void blitLatestFrame(JNIEnv *env, int &lastSeq, int &geomW, int &geomH, s
             w = h = 0;
         }
         if (w > 0 && h > 0 && w <= 16384 && h <= 16384) {
+            g_lastCanvasH.store(h, std::memory_order_relaxed);
+            h = shownRows(h); // the top rows; the copy below never reads the strip
             g_lastFrameW.store(w, std::memory_order_relaxed);
             g_lastFrameH.store(h, std::memory_order_relaxed);
             jintArray arr = (jintArray)env->CallStaticObjectMethod(g_bridgeCls, g_midPixels);
@@ -1707,6 +1724,9 @@ static void *jvmThreadMain(void *argp) {
                     setcb(rcPresentAcquireWindow, rcPresentSurfaceGen, rcPresentReleaseWindow, rcPresentSetFrameDims);
                     g_directPresent.store(true, std::memory_order_release);
                     g_routecFramesPresented = (uint64_t (*)()) dlsym(rh, "RouteC_framesPresented");  // Phase 3 auto-GPU watchdog signal
+                    auto setRows = (void (*)(int (*)(int)))dlsym(rh, "RouteC_setShownRows");
+                    if (setRows)
+                        setRows(shownRows);
                     LOGI("%s: direct EGL present armed (CPU present thread stands down)", mode);
                 } else {
                     LOGE("%s: RouteC_setPresentCallbacks not found — using CPU readback present", mode);
@@ -2021,6 +2041,16 @@ extern "C" JNIEXPORT jint JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeFrameWidth(JNIEnv *, jobject) { return g_lastFrameW.load(std::memory_order_relaxed); }
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeFrameHeight(JNIEnv *, jobject) { return g_lastFrameH.load(std::memory_order_relaxed); }
+// The full canvas height of the last frame, rows hidden under the screen included (a resize matches on it).
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeCanvasHeight(JNIEnv *, jobject) {
+    return g_lastCanvasH.load(std::memory_order_relaxed);
+}
+// Large portrait UI: how many of the canvas's top rows to show (see g_shownRows); 0 shows them all.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetShownRows(JNIEnv *, jobject, jint rows) {
+    g_shownRows.store(rows > 0 ? rows : 0, std::memory_order_relaxed);
+}
 // Phase 3 (auto-GPU watchdog): frames the GPU/117HD renderer has actually presented. 0 == not armed or renderer
 // never activated (failed/black/crashed); climbing == success. The Kotlin first-boot fallback polls this.
 extern "C" JNIEXPORT jlong JNICALL
@@ -2644,6 +2674,14 @@ static void facadeVoidIntLong(jclass cls, jmethodID m, jint a, jlong b) {
     if (hs->ExceptionCheck())
         hs->ExceptionClear();
 }
+static void facadeVoid3Int(jclass cls, jmethodID m, jint a, jint b, jint c) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m)
+        return;
+    hs->CallStaticVoidMethod(cls, m, a, b, c);
+    if (hs->ExceptionCheck())
+        hs->ExceptionClear();
+}
 static void facadeVoid4Int(jclass cls, jmethodID m, jint a, jint b, jint c, jint d) {
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !cls || !m) return;
@@ -3004,6 +3042,14 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeSetOverlayInsets(JNIEnv *, jobject, jint l, jint t, jint r, jint b) {
     if (!hudReady()) return;
     facadeVoid4Int(g_hudCls, g_midSetOverlayInsets, l, t, r, b);
+}
+// Large portrait UI: the canvas rows the screen shows (the hidden strip lies below them) and the band between the chat
+// and the inventory that windows are pinned into. 0 rows turns the strip off.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetHudStrip(JNIEnv *, jobject, jint visibleRows, jint top, jint bottom) {
+    if (!hudReady())
+        return;
+    facadeVoid3Int(g_hudCls, g_midSetHudStrip, visibleRows, top, bottom);
 }
 // Phase-4 chat pill: collapse = the shared shove-off-canvas (widget stays alive, reopen instant); switch = the
 // engine tab's op-script replay (works while the button is off-canvas, unlike a proxy click).

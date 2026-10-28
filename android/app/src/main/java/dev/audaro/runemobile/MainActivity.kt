@@ -334,6 +334,7 @@ class MainActivity : AppCompatActivity() {
     private var tabGridCollapsed = false // the expand stone's choice, kept in PREFS_CHAT
     private var lastSideX = Int.MIN_VALUE // last side-panel relocation sent (send only on change)
     private var lastSideY = Int.MIN_VALUE
+    private var lastHudStrip: IntArray? = null // large portrait UI: the last setHudStrip sent (send only on change)
     private var lastChatX = Int.MIN_VALUE // last chat-at-top relocation sent (send only on change)
     private var lastChatY = Int.MIN_VALUE
 
@@ -481,6 +482,16 @@ class MainActivity : AppCompatActivity() {
         // FOLD-1: the game's fixed-mode width, the narrowest canvas its resizable layout is built for.
         private const val MIN_CANVAS_W = 765
 
+        // Large portrait UI (HudStrip): a phone's portrait canvas is this wide, so the world, the inventory and the
+        // windows draw 765/600 bigger, and STRIP_CANVAS_H rows taller than the screen shows. The bridge draws the
+        // chat and the minimap full size in those hidden rows and copies them back at the 765 size. iOS
+        // kStripCanvasW/kStripCanvasH; STRIP_CANVAS_H is HudStrip.STRIP_H.
+        private const val STRIP_CANVAS_W = 600
+        private const val STRIP_CANVAS_H = 400
+
+        // The relocated chat's height (the filter row plus the message area), canvas px at the 765 size.
+        private const val CHAT_H_CANVAS = 145
+
         // FOLD-2: how far the window's shape may drift from the canvas's before the stage letterboxes instead of
         // stretching. A phone's canvas matches its screen exactly; a book foldable changing panels drifts ~2x.
         // FOLD-3 uses the same slack for when a window change is worth a canvas resize.
@@ -522,6 +533,10 @@ class MainActivity : AppCompatActivity() {
         @Volatile var canvasW = 0
 
         @Volatile var canvasH = 0
+
+        // Large portrait UI: the canvas rows below the shown canvasH (STRIP_CANVAS_H while the strip is on, else 0).
+        // The engine draws canvasW x (canvasH + canvasStripH); everything the host maps lives in the shown rows.
+        @Volatile var canvasStripH = 0
 
         // ENH-B06: a static hook the native World Switcher Composable (in PluginPanel's Compose tree, with no
         // back-reference to the activity) calls to arm the "Hopping…" scrim from its row-tap / Prev-Next hop. The
@@ -2137,13 +2152,14 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread { Toast.makeText(this, "Screenshot unavailable", Toast.LENGTH_SHORT).show() }
                 return@onBridge
             }
-            val h = px.size / w
+            // Only the shown rows: a large portrait canvas keeps a strip below them that the screen never shows.
+            val h = minOf(px.size / w, JvmLauncher.frameHeight().let { if (it > 0) it else Int.MAX_VALUE })
             // Source is 0x00RRGGBB (alpha unset). Force opaque; channel order already matches Android's ARGB int
             // (0xAARRGGBB) — NO R<->B swizzle here (unlike the SurfaceView blit, which swizzles for RGBA_8888).
             for (i in px.indices) px[i] = px[i] or 0xFF000000.toInt()
             val savedUri =
                 try {
-                    val bmp = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
+                    val bmp = Bitmap.createBitmap(px, 0, w, w, h, Bitmap.Config.ARGB_8888)
                     val u = writePngToGallery(bmp)
                     bmp.recycle()
                     u
@@ -2878,7 +2894,7 @@ class MainActivity : AppCompatActivity() {
                 // direction mapping as iOS (kChatScrollDir = -1, i.e. send -dy).
                 val fh = JvmLauncher.frameHeight()
                 val vh = surfaceView.height
-                val k = if (fh > 0 && vh > 0) fh.toFloat() / vh else 1f
+                val k = if (fh > 0 && vh > 0) fh.toFloat() / vh / hudScale else 1f
                 chatScrollAccum += -distanceY * k
                 val whole = chatScrollAccum.toInt()
                 if (whole != 0) {
@@ -3947,6 +3963,7 @@ class MainActivity : AppCompatActivity() {
             applySidePanel(o)
             applyChatAtTop()
             applyMinimap(o)
+            applyWindowBand()
             if (!chromeUiLogged && chromeOverlay.gridLeftPx > 0f) {
                 chromeUiLogged = true
                 Log.i(
@@ -3999,6 +4016,7 @@ class MainActivity : AppCompatActivity() {
         // The row's own enable gate from here on: the dialogue owns the chatbox region for as long as it is open, and
         // a chat put away has no filter stones.
         val tabsOn = on && !chatDialogueActive
+        chatTabOverlay.chatScale = hudScale
         val n = chatTabOverlay.update(chatSnap, sx, sy, tabsOn && !chatPutAway)
         // Read from the snapshot, not the stone targets: those are gone while the chat is put away, which is when the
         // bubbles need it. The engine reports all seven stones either way.
@@ -4019,6 +4037,7 @@ class MainActivity : AppCompatActivity() {
         // engine owns the dialogue and the parchment is suppressed, yet the tap guard still needs its rows.
         val dlg = if (on) DialoguePublish.fromNative(JvmLauncher.dialoguePublishRaw()) else DialoguePublish(-1L, "{}")
         if (chatDialogueActive) updateDialogueTapTargets(dlg.json, dlg.seq) else clearDialogueTapTargets()
+        dialogueOverlay.chatScale = hudScale
         dialogueOverlay.update(chatSnap, if (show) dlg else DialoguePublish(-1L, "{}"), sx, sy, show)
         if (on) followDialogue(engineDlg)
         if (tabsOn && n > 0 && !chatTabsLogged) {
@@ -4104,6 +4123,38 @@ class MainActivity : AppCompatActivity() {
         JvmLauncher.onBridge { JvmLauncher.relocateSidePanel(sideX, sideY) }
     }
 
+    /** Large portrait UI: pin the game's windows (the bank, the GE, the settings) into the band between the chat and the
+     *  minimap above and the side panel and the tab group below, so none opens under the HUD. Canvas px, 6 px clear of
+     *  each, measured from where the chat sits whether or not it is collapsed, so opening it never moves a window. */
+    private fun applyWindowBand() {
+        if (canvasStripH <= 0 || pendingCanvas != null || lastChatY < 0) return
+        val fh = JvmLauncher.frameHeight()
+        val vh = surfaceView.height
+        val gy0 = chromeOverlay.gridTopPx
+        if (fh <= 0 || vh <= 0 || gy0 <= 0f) return
+        var top = lastChatY + hudPx(CHAT_H_CANVAS)
+        minimapRectCanvas?.let { top = maxOf(top, it[1] + it[3]) }
+        var bottom = Math.round(gy0 * fh / vh)
+        if (lastSideY >= 0) bottom = minOf(bottom, lastSideY)
+        // The first ticks after login can read the side panel before it settles; an empty band would only flash the
+        // windows to the whole screen and back.
+        if (bottom - 6 > top + 6) sendHudStrip(canvasH, top + 6, bottom - 6)
+    }
+
+    /** Large portrait UI: give the bridge the shown rows and the window band (HudVeneerBridge.setHudStrip), when they
+     *  change; 0 rows turns the strip off. UI-thread only. */
+    private fun sendHudStrip(
+        rows: Int,
+        top: Int,
+        bottom: Int,
+    ) {
+        val v = intArrayOf(rows, top, bottom)
+        if (lastHudStrip?.contentEquals(v) == true) return
+        lastHudStrip = v
+        Log.i(TAG, "[strip] shown $rows rows, windows $top..$bottom")
+        JvmLauncher.onBridge { JvmLauncher.setHudStrip(rows, top, bottom) }
+    }
+
     /** Stop relocating the engine side panel (let it return to its native position) when the grid disengages. */
     private fun releaseSidePanel() {
         if (lastSideX == -1 && lastSideY == -1) return
@@ -4126,7 +4177,8 @@ class MainActivity : AppCompatActivity() {
         val ins = safeInsetsLTR()
         // The column takes the safe area's top-left corner, flush, as the official one does, and the chat sits right
         // of it.
-        chatBaseX = Math.round(ins[0] * kx) + DOOR_W_CANVAS
+        val door = hudPx(DOOR_W_CANVAS)
+        chatBaseX = Math.round(ins[0] * kx) + door
         chatBaseY = Math.round(ins[1] * ky)
         // Honour the user's edit-mode override (P2-3); clamp the WHOLE chatbox on-frame (against frame − chat size,
         // from the last reported bounds) so a stale offset from a since-changed dimension can't push it off-screen.
@@ -4134,15 +4186,16 @@ class MainActivity : AppCompatActivity() {
         val chatW = cr?.getOrNull(2) ?: 0
         val chatH = cr?.getOrNull(3) ?: 0
         // Never so far left that the column would leave the canvas.
-        val chatX = (chatBaseX + chatUserDX).coerceIn(DOOR_W_CANVAS, (fw - chatW).coerceAtLeast(DOOR_W_CANVAS))
+        val chatX = (chatBaseX + chatUserDX).coerceIn(door, (fw - chatW).coerceAtLeast(door))
         val chatY = (chatBaseY + chatUserDY).coerceIn(0, (fh - chatH).coerceAtLeast(0))
         // The column moves with the chat (overlay edit included), so it is placed even when the chat hasn't moved. Its
         // keyboard stands in for the ⌨ button while it shows; the map hides the whole overlay, so ⌨ comes back there.
         chromeOverlay.setChatColumn(
-            (chatX - DOOR_W_CANVAS) / kx,
+            (chatX - door) / kx,
             chatY / ky,
             chatPutAway,
             chatPutAway && chatUnread,
+            hudScale,
         )
         keyboardToggleBtn?.visibility = if (mapOpen) View.VISIBLE else View.GONE
         if (chatX == lastChatX && chatY == lastChatY) return
@@ -4305,17 +4358,27 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             val (w, h) = if (root == null) 0 to 0 else canvasFor(root.width, root.height, resources.displayMetrics.density)
+            val strip = if (root == null) 0 else stripFor(root.width, root.height, resources.displayMetrics.density)
             val oldW = canvasW
             val oldH = canvasH
             val worth = abs(w.toFloat() / oldW - 1f) > STAGE_ASPECT_SLACK || abs(h.toFloat() / oldH - 1f) > STAGE_ASPECT_SLACK
             if (minOf(w, h, oldW, oldH) > 0 && worth) {
+                // A strip turning on crops from the first frame drawn at the new size (an older, shorter frame shows
+                // whole either way); one turning off waits for adoption, so the old frame's strip never shows.
+                if (strip > 0) {
+                    JvmLauncher.setShownRows(h)
+                    sendHudStrip(h, 0, 0)
+                }
                 JvmLauncher.onBridge {
-                    val ok = JvmLauncher.requestResize(w, h)
-                    Log.i(TAG, "fold: canvas resize ${oldW}x$oldH -> ${w}x$h ${if (ok) "requested" else "refused (bridge not ready)"}")
+                    val ok = JvmLauncher.requestResize(w, h + strip)
+                    Log.i(
+                        TAG,
+                        "fold: canvas resize ${oldW}x$oldH -> ${w}x$h (+$strip hidden) ${if (ok) "requested" else "refused (bridge not ready)"}",
+                    )
                     if (ok) {
                         runOnUiThread {
                             pendingCanvas = w to h
-                            adoptCanvasWhenDrawn(w, h, SystemClock.uptimeMillis() + CANVAS_WAIT_MS)
+                            adoptCanvasWhenDrawn(w, h, strip, SystemClock.uptimeMillis() + CANVAS_WAIT_MS)
                         }
                     }
                 }
@@ -4329,17 +4392,24 @@ class MainActivity : AppCompatActivity() {
     private fun adoptCanvasWhenDrawn(
         w: Int,
         h: Int,
+        strip: Int,
         deadline: Long,
     ) {
         if (pendingCanvas == w to h) {
-            val drawn = JvmLauncher.frameWidth() == w && JvmLauncher.frameHeight() == h
+            // The full canvas height, not the shown rows: a strip turning off leaves the old crop in place until here.
+            val drawn = JvmLauncher.frameWidth() == w && JvmLauncher.canvasHeight() == h + strip
             if (drawn || SystemClock.uptimeMillis() >= deadline) {
                 pendingCanvas = null
                 canvasW = w
                 canvasH = h
+                canvasStripH = strip
+                if (strip == 0) {
+                    JvmLauncher.setShownRows(0)
+                    sendHudStrip(0, 0, 0)
+                }
                 fitGameStage()
             } else {
-                rootContainer?.postDelayed({ adoptCanvasWhenDrawn(w, h, deadline) }, CANVAS_POLL_MS)
+                rootContainer?.postDelayed({ adoptCanvasWhenDrawn(w, h, strip, deadline) }, CANVAS_POLL_MS)
             }
         }
     }
@@ -4394,7 +4464,23 @@ class MainActivity : AppCompatActivity() {
         density: Float,
     ) = minOf(w, h) / density >= LARGE_SCREEN_DP
 
-    /** The canvas size for a [w]x[h] px window (or screen) at [density], in the window's orientation.
+    /** Large portrait UI: the hidden rows a [w]x[h] px window's canvas gets below the shown ones: STRIP_CANVAS_H for a
+     *  phone held portrait, else none. */
+    private fun stripFor(
+        w: Int,
+        h: Int,
+        density: Float,
+    ) = if (h > w && !isLargeScreen(w, h, density)) STRIP_CANVAS_H else 0
+
+    /** How much smaller than the engine draws them the chat and the minimap show: 600/765 while the strip is on, else
+     *  1. Their native chrome (the column, the filter stones, the dialogue box) scales with them; the tab group and
+     *  the side panel stay canvas-sized, as big as the inventory they hold. */
+    private val hudScale: Float get() = if (canvasStripH > 0 && canvasW > 0) canvasW.toFloat() / MIN_CANVAS_W else 1f
+
+    private fun hudPx(px: Int) = Math.round(px * hudScale)
+
+    /** The canvas size for a [w]x[h] px window (or screen) at [density], in the window's orientation, counting only the
+     *  rows the screen shows (see [stripFor]).
      *  UI-2: a phone's canvas is 540 tall. A lower engine canvas blits up to a physically BIGGER HUD (minimap, orbs,
      *  chat, side panel, tab grid all scale together) — the only working way to enlarge the minimap (the per-widget
      *  MINIMAP-scale path overlaps the orbs / blanks terrain). 540 is iOS-proven safe; below ~480 the minimap column
@@ -4404,7 +4490,8 @@ class MainActivity : AppCompatActivity() {
      *  2184x1968 inner panel), capped at the screen's own pixels.
      *  FOLD-1: the canvas is never narrower than MIN_CANVAS_W, the narrowest layout the game is built for (a split-
      *  screen half, a near-square screen).
-     *  Phones keep the exact integer maths of the original fixed-540 sizing, so their canvas doesn't move. */
+     *  Phones keep the exact integer maths of the original fixed-540 sizing, so their canvas doesn't move. In portrait
+     *  a phone's canvas is STRIP_CANVAS_W wide instead (the large portrait UI). */
     private fun canvasFor(
         w: Int,
         h: Int,
@@ -4424,6 +4511,8 @@ class MainActivity : AppCompatActivity() {
         renderShort =
             if (w >= h) {
                 maxOf(renderShort, ((MIN_CANVAS_W.toLong() * shortEdge + longEdge - 1) / longEdge).toInt())
+            } else if (stripFor(w, h, density) > 0) {
+                STRIP_CANVAS_W
             } else {
                 maxOf(renderShort, MIN_CANVAS_W)
             }
@@ -4658,9 +4747,9 @@ class MainActivity : AppCompatActivity() {
         val kx = fw.toFloat() / vw
         val ky = fh.toFloat() / vh
         val ins = safeInsetsLTR()
-        val margin = 8
-        var mapW = 211 // fallback cluster width until the snapshot reports it
-        var mapH = 340 // fallback cluster height until the snapshot reports it
+        val margin = hudPx(8)
+        var mapW = hudPx(211) // fallback cluster width until the snapshot reports it
+        var mapH = hudPx(340) // fallback cluster height until the snapshot reports it
         val mc = o?.optJSONArray("mapContainer")
         if (mc != null && mc.length() >= 4 && mc.optInt(2) > 0) {
             mapW = mc.getInt(2)
@@ -5579,19 +5668,24 @@ class MainActivity : AppCompatActivity() {
             // UI-2 / FOLD-1 / FOLD-3: see canvasFor. The boot canvas takes the orientation Game settings > Screen holds
             // the activity to, whatever the screen reads mid-rotation; a window that later changes shape gets a FOLD-3
             // resize.
+            val portrait = ScreenSetting.portrait(app)
             val (renderW, renderH) =
-                if (ScreenSetting.portrait(app)) {
+                if (portrait) {
                     canvasFor(shortEdge, longEdge, dm.density)
                 } else {
                     canvasFor(longEdge, shortEdge, dm.density)
                 }
+            val strip = if (portrait) stripFor(shortEdge, longEdge, dm.density) else 0
             canvasW = renderW
             canvasH = renderH // for the overlay free-drag pad → canvas-pixel mapping
+            canvasStripH = strip
+            JvmLauncher.setShownRows(if (strip > 0) renderH else 0)
             runOnUiThread { fitGameStage() } // FOLD-2: a window already off this shape (split screen) letterboxes now
-            opts.add("-Drunelite.headless.resize=${renderW}x$renderH")
+            opts.add("-Drunelite.headless.resize=${renderW}x${renderH + strip}")
             Log.i(
                 TAG,
-                "A7 resize armed: ${renderW}x$renderH (screen ${longEdge}x$shortEdge; resizable iff account in resizable display mode)",
+                "A7 resize armed: ${renderW}x${renderH + strip}, shown ${renderW}x$renderH (screen ${longEdge}x$shortEdge; " +
+                    "resizable iff account in resizable display mode)",
             )
         }
         // 117HD auto-login: on a real home-network device login works, so autologin straight in-world (RLHDStarter

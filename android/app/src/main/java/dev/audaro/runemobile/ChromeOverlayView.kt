@@ -68,6 +68,7 @@ class ChromeOverlayView(
     // NaN while the chat isn't placed. With the chat put away the keyboard goes; the bubbles flash on unread.
     private var columnX = Float.NaN
     private var columnY = Float.NaN
+    private var columnScale = 1f // the chat's own scale, which the column keeps (the large portrait UI shows it smaller)
     private var chatPutAway = false
     private var chatUnread = false
 
@@ -243,19 +244,22 @@ class ChromeOverlayView(
     }
 
     /** Host: the column's top-left in view px, beside the chat; NaN hides it. [putAway] = the chat is put away (the
-     *  keyboard goes, the bubbles sit on the door's stone); [unread] = a message waits (they flash). */
+     *  keyboard goes, the bubbles sit on the door's stone); [unread] = a message waits (they flash). [scale] = how much
+     *  smaller than canvas px the chat shows, which the column follows. */
     fun setChatColumn(
         x: Float,
         y: Float,
         putAway: Boolean,
         unread: Boolean,
+        scale: Float = 1f,
     ) {
         if (x.isNaN() && columnX.isNaN()) return
-        val moved = x != columnX || y != columnY
+        val moved = x != columnX || y != columnY || scale != columnScale
         val restated = putAway != chatPutAway || unread != chatUnread
         if (moved || restated) {
             columnX = x
             columnY = y
+            columnScale = scale
             chatPutAway = putAway
             chatUnread = unread
             invalidate()
@@ -357,8 +361,8 @@ class ChromeOverlayView(
 
     /** Column stone [c] (0 door, 1 bubbles, 2 keyboard) in view px. */
     private fun columnStone(c: Int): RectF {
-        val top = columnY + (COLUMN_Y + c * PITCH) / ky
-        return RectF(columnX, top, columnX + COLUMN_W / kx, top + STONE / ky)
+        val top = columnY + (COLUMN_Y + c * PITCH) * columnScale / ky
+        return RectF(columnX, top, columnX + COLUMN_W * columnScale / kx, top + STONE * columnScale / ky)
     }
 
     /** The image for grid entry [i] (an engine tab index or [EXPAND]); null until the sprites are captured. */
@@ -440,10 +444,10 @@ class ChromeOverlayView(
     ): Int {
         if (columnX.isNaN()) return NONE
         val ins = safeInsetsIn(this)
-        val inColumn = x >= columnX - edgeReach(columnX, ins[0].toFloat()) && x <= columnX + COLUMN_W / kx
+        val inColumn = x >= columnX - edgeReach(columnX, ins[0].toFloat()) && x <= columnX + COLUMN_W * columnScale / kx
         return (0 until (if (chatPutAway) 2 else 3)).firstOrNull { c ->
             val r = columnStone(c)
-            val top = if (c == 0) r.top - edgeReach(r.top, ins[1] + COLUMN_Y / ky) else r.top
+            val top = if (c == 0) r.top - edgeReach(r.top, ins[1] + COLUMN_Y * columnScale / ky) else r.top
             inColumn && y >= top && y < r.bottom
         } ?: NONE
     }
