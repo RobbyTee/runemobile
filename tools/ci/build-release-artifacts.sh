@@ -194,8 +194,9 @@ if wants ios; then
 	APP="$DD/Build/Products/Release-iphoneos/RuneMobile.app"
 	[ -d "$APP" ] || die "no .app produced at $APP"
 
-	# 4) Package Payload/*.app -> IPA and stamp the version (Info.plist hardcodes it, so xcodebuild's
-	#    MARKETING_VERSION is ignored — SideStore re-signs on install, so touching the bundle is harmless).
+	# 4) Package Payload/*.app -> IPA and stamp the version. xcodebuild already took MARKETING_VERSION (Info.plist
+	#    reads it); the stamp pins the packaged plist whatever the build settings did. SideStore re-signs on
+	#    install, so touching the bundle is harmless.
 	log "package IPA"
 	WORK="$DIST/ipa-work"; rm -rf "$WORK"; mkdir -p "$WORK/Payload"
 	cp -R "$APP" "$WORK/Payload/"

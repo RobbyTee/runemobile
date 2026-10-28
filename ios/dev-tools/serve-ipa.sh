@@ -83,7 +83,8 @@ JARVER="$(sed -n 's/^project\.build\.version=//p' gradle.properties)"; [ -n "$JA
 # SideStore re-signs this build and the hosted release channel's under one bundle ID, so it only offers this one as
 # an update when its version is higher. Stamp <release>.<build>: the release's semver, read where
 # tools/ci/build-release-artifacts.sh reads it, then this counter. 0.5.0.49 sorts above 0.5.0 and its rolling
-# 0.5.0-master.N builds, and below the next release. (project.yml's MARKETING_VERSION is a stale 0.1.)
+# 0.5.0-master.N builds, and below the next release. (project.yml's MARKETING_VERSION is the bare semver, which
+# would not sort above the release.)
 SEMVER="$(sed -nE 's/^[[:space:]]*val verMajor = ([0-9]+).*/\1/p' android/app/build.gradle.kts | head -1)"
 SEMVER="$SEMVER.$(sed -nE 's/^[[:space:]]*val verMinor = ([0-9]+).*/\1/p' android/app/build.gradle.kts | head -1)"
 SEMVER="$SEMVER.$(sed -nE 's/^[[:space:]]*val verPatch = ([0-9]+).*/\1/p' android/app/build.gradle.kts | head -1)"

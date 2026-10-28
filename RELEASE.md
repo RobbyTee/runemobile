@@ -161,7 +161,8 @@ next launch as usual.
       mismatch — `REQUIRE_RELEASE_KEY=1` — but verify independently by hand regardless.)
 - [ ] Disclosure block (above) pasted into the release notes.
 - [ ] Known-issues list trimmed to what's true for this build.
-- [ ] `versionName` / `versionCode` bumped; `CHANGELOG.md` updated.
+- [ ] `versionName` / `versionCode` bumped, with `MARKETING_VERSION` in `ios/app/project.yml` to match (the
+      release gate checks); `CHANGELOG.md` updated.
 - [ ] `PRIVACY.md` still accurate (re-check if any data flow changed).
 - [ ] Built against the current OSRS revision (no `js5connect_outofdate`).
 - [ ] **iOS Simulator gate green** — `ios/dev-tools/sim-gate.sh` ends `VERDICT: SIM_GATE_GREEN`: the

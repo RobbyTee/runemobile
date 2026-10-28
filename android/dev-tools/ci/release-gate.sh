@@ -15,7 +15,8 @@
 # Stages, in order:
 #   1   cross-port contract (check-contract.sh) + bridge API reference freshness (gen-bridge-api.py --check)
 #   1a  Jagex OAuth wire contract (check-auth-contract.sh)
-#   1b  RuneLite api/hub version-pin review (check-hub-pin.sh)    — --contract-only stops after this
+#   1b  RuneLite api/hub version-pin review (check-hub-pin.sh) + app version parity
+#                                                                  — --contract-only stops after this
 #   1c  shellcheck   1d  ktlint   1e  detekt                       — each fails if the tool is missing
 #   1f  headless bridge unit tests (:client:test --tests net.runelite.client.headless.*)
 #   2   :app:assembleRelease (+ verifyNoReleaseSecret / verifyReleaseBootAssets)
@@ -47,7 +48,7 @@ for arg in "$@"; do
 		--contract-only)     contract_only=1 ;;
 		--skip-build)        run_build=0 ;;
 		--with-device-smoke) run_device_smoke=1 ;;
-		-h|--help)           sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help)           sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "release-gate: unknown arg '$arg' (see --help)" >&2; exit 64 ;;
 	esac
 done
@@ -98,6 +99,17 @@ esac
 # what happened between 2026-10-13 and 2026-10-15. Build-independent, so it costs the pre-flight nothing.
 stage "hub-pin review (RuneLite api/hub version drift, GAP-B-2)"
 "$ROOT/tools/shared-contract/check-hub-pin.sh" || fail "hub-pin (RuneLite api/hub pin needs review — see above)"
+
+# The iOS app's MARKETING_VERSION is what a plain Xcode build shows; release builds override it with the semver from
+# build.gradle.kts. A bump that misses project.yml leaves every dev build reporting an old version, so check here.
+stage "app version parity (ios/app/project.yml MARKETING_VERSION vs android/app/build.gradle.kts)"
+gradle_ver="$(sed -nE 's/^[[:space:]]*val ver(Major|Minor|Patch) = ([0-9]+).*/\2/p' "$ANDROID/app/build.gradle.kts" | paste -sd. -)"
+ios_ver="$(sed -nE 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' "$ROOT/ios/app/project.yml")"
+[[ "$gradle_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+	|| fail "app version parity (could not read verMajor/verMinor/verPatch from android/app/build.gradle.kts: got '$gradle_ver')"
+[ "$ios_ver" = "$gradle_ver" ] \
+	|| fail "app version parity (ios/app/project.yml MARKETING_VERSION is '$ios_ver' but android/app/build.gradle.kts is $gradle_ver: bump both)"
+echo "  → both apps are $gradle_ver."
 
 if [ "$contract_only" -eq 1 ]; then
 	echo; echo "✅ contract-only pre-flight PASS."; exit 0

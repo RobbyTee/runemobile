@@ -179,7 +179,8 @@ user-visible upstream brought in. For example:
   1.13.4 release, so plugins updated for it install.
 ```
 
-Bump `verPatch` in `android/app/build.gradle.kts` when the merge is going out as a release on its own.
+Bump `verPatch` in `android/app/build.gradle.kts` when the merge is going out as a release on its own, and
+`MARKETING_VERSION` in `ios/app/project.yml` to match (the release gate fails until the two agree).
 
 ### 11. Push
 
