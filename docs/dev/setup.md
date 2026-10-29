@@ -267,6 +267,8 @@ A clone needs no hand-placed jars:
 The iOS runtime is the one input no staging script produces for you. It is an arm64 Mach-O OpenJDK 21 with a binary
 patch, and it lives at `ios/dev-tools/jre/` (gitignored). Build it once per machine:
 
+`ios/dev-tools/setup-ios-jre.sh` does all three steps below in one go. By hand:
+
 1. Download the SHA-pinned zip, check its hash and unpack it, following
    [`ios/dev-tools/JRE21-INVENTORY.md`](../../ios/dev-tools/JRE21-INVENTORY.md).
 2. Run `ios/dev-tools/patch-jre-txm.sh`. It verifies the original bytes, then NOPs the branches in `libjvm` that keep
